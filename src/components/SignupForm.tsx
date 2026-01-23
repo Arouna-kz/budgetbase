@@ -60,7 +60,7 @@ const SignupForm: React.FC<SignupFormProps> = ({ onBackToLogin }) => {
           <div className="flex items-center justify-center w-16 h-16 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl mx-auto mb-4">
             <Target className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">BudgetFlow</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">BudgetBase</h1>
           <p className="text-gray-600">Créer votre compte administrateur</p>
         </div>
 
@@ -218,7 +218,7 @@ const SignupForm: React.FC<SignupFormProps> = ({ onBackToLogin }) => {
               <span className="text-sm text-blue-700 font-medium">Compte Administrateur</span>
             </div>
             <p className="text-sm text-blue-600 mt-1">
-              Ce compte aura tous les privilèges d'administration sur BudgetFlow
+              Ce compte aura tous les privilèges d'administration sur BudgetBase
             </p>
           </div>
 
@@ -247,7 +247,7 @@ const SignupForm: React.FC<SignupFormProps> = ({ onBackToLogin }) => {
             <h4 className="text-sm font-medium text-green-800 mb-2">Premier utilisateur</h4>
             <p className="text-sm text-green-700">
               En tant que premier utilisateur, vous obtiendrez automatiquement les privilèges d'administrateur 
-              pour configurer BudgetFlow et créer d'autres comptes utilisateurs.
+              pour configurer BudgetBase et créer d'autres comptes utilisateurs.
             </p>
           </div>
         </div>

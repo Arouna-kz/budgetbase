@@ -180,7 +180,7 @@ export const printElement = (elementId: string, title: string = 'Document') => {
       
       <div class="print-footer">
         <p>Document généré par la plateforme de gestion budgétaire</p>
-        <p>BudgetFlow - Système de Gestion Budgétaire</p>
+        <p>BudgetBase - Système de Gestion Budgétaire</p>
       </div>
     </body>
     </html>
