@@ -84,24 +84,34 @@ export const showInfo = (title: string, text?: string) => {
 
 // Confirmation de suppression
 export const confirmDelete = async (title: string, text?: string): Promise<boolean> => {
-  const result = await Swal.fire({
-    ...defaultConfig,
-    icon: 'warning',
-    title,
-    text: text || 'Cette action est irréversible.',
-    showCancelButton: true,
-    confirmButtonText: 'Oui, supprimer',
-    cancelButtonText: 'Annuler',
-    reverseButtons: true,
-    customClass: {
-      ...defaultConfig.customClass,
-      confirmButton: 'bg-red-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-red-700 transition-colors',
-      cancelButton: 'bg-gray-100 text-gray-700 px-6 py-3 rounded-xl font-medium hover:bg-gray-200 transition-colors'
-    }
-  });
-  
-  //Retourner un booléen explicite
-  return result.isConfirmed;
+  try {
+    const result = await Swal.fire({
+      ...defaultConfig,
+      icon: 'warning',
+      title,
+      text: text || 'Cette action est irréversible.',
+      showCancelButton: true,
+      confirmButtonText: 'Oui, supprimer',
+      cancelButtonText: 'Annuler',
+      reverseButtons: true,
+      customClass: {
+        ...defaultConfig.customClass,
+        confirmButton: 'bg-red-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-red-700 transition-colors',
+        cancelButton: 'bg-gray-100 text-gray-700 px-6 py-3 rounded-xl font-medium hover:bg-gray-200 transition-colors'
+      }
+    });
+    
+    // Debug: Vérifiez ce que retourne SweetAlert2
+    console.log("SweetAlert2 result:", result);
+    console.log("isConfirmed:", result?.isConfirmed);
+    console.log("value:", result?.value);
+    
+    // Retourner explicitement true/false
+    return result?.isConfirmed === true;
+  } catch (error) {
+    console.error("Error in confirmDelete:", error);
+    return false;
+  }
 };
 
 // Confirmation générale

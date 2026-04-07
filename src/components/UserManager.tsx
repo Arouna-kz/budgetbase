@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Plus, Edit, Trash2, Users, Shield, Eye, EyeOff, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Search, Menu, X } from 'lucide-react';
 import { showSuccess, showError, showWarning, showValidationError, confirmDelete } from '../utils/alerts';
 import { User, UserRole, DEFAULT_ROLES, USER_STATUS, Permission, PermissionAction } from '../types/user';
-import { supabase } from '../lib/supabase';
 import { usersService } from '../services/supabaseService';
 import { PermissionService } from '../services/permissionService';
 import { usePermissions } from '../hooks/usePermissions';
@@ -43,6 +42,17 @@ const UserManager: React.FC<UserManagerProps> = ({
   onUpdateRole,
   onDeleteRole
 }) => {
+
+  if (roles === undefined) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-gray-600">Chargement des rôles...</p>
+        </div>
+      </div>
+    );
+  }
   // États principaux
   const [activeTab, setActiveTab] = useState<'users' | 'roles'>('users');
   const [showUserForm, setShowUserForm] = useState(false);
@@ -458,50 +468,60 @@ const UserManager: React.FC<UserManagerProps> = ({
 
   // Filtrage et tri des données
   const filteredAndSortedUsers = useMemo(() => {
-    let filtered = usersWithRoles.filter(user =>
-      user.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.profession.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.roleName.toLowerCase().includes(searchTerm.toLowerCase())
+  let filtered = usersWithRoles.filter(user => {
+    // Vérification de sécurité pour chaque propriété
+    const firstName = user.firstName || '';
+    const lastName = user.lastName || '';
+    const email = user.email || '';
+    const profession = user.profession || '';
+    const roleName = user.roleName || '';
+    const searchTermLower = searchTerm.toLowerCase();
+
+    return (
+      firstName.toLowerCase().includes(searchTermLower) ||
+      lastName.toLowerCase().includes(searchTermLower) ||
+      email.toLowerCase().includes(searchTermLower) ||
+      profession.toLowerCase().includes(searchTermLower) ||
+      roleName.toLowerCase().includes(searchTermLower)
     );
+  });
 
-    // Tri
-    filtered.sort((a, b) => {
-      let aValue: any, bValue: any;
+  // Tri avec vérifications
+  filtered.sort((a, b) => {
+    let aValue: any, bValue: any;
 
-      switch (userSortField) {
-        case 'firstName':
-        case 'lastName':
-        case 'email':
-        case 'profession':
-          aValue = a[userSortField]?.toLowerCase() || '';
-          bValue = b[userSortField]?.toLowerCase() || '';
-          break;
-        case 'role':
-          aValue = a.roleName.toLowerCase();
-          bValue = b.roleName.toLowerCase();
-          break;
-        case 'status':
-          aValue = a.isActive;
-          bValue = b.isActive;
-          break;
-        case 'lastLogin':
-          aValue = a.lastLogin ? new Date(a.lastLogin).getTime() : 0;
-          bValue = b.lastLogin ? new Date(b.lastLogin).getTime() : 0;
-          break;
-        default:
-          aValue = a[userSortField];
-          bValue = b[userSortField];
-      }
+    switch (userSortField) {
+      case 'firstName':
+      case 'lastName':
+      case 'email':
+      case 'profession':
+        aValue = (a[userSortField] || '').toLowerCase();
+        bValue = (b[userSortField] || '').toLowerCase();
+        break;
+      case 'role':
+        aValue = (a.roleName || '').toLowerCase();
+        bValue = (b.roleName || '').toLowerCase();
+        break;
+      case 'status':
+        aValue = a.isActive;
+        bValue = b.isActive;
+        break;
+      case 'lastLogin':
+        aValue = a.lastLogin ? new Date(a.lastLogin).getTime() : 0;
+        bValue = b.lastLogin ? new Date(b.lastLogin).getTime() : 0;
+        break;
+      default:
+        aValue = a[userSortField] || '';
+        bValue = b[userSortField] || '';
+    }
 
-      if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
-      if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
+    if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
+    if (aValue > bValue) return sortDirection === 'asc' ? 1 : -1;
+    return 0;
+  });
 
-    return filtered;
-  }, [usersWithRoles, searchTerm, userSortField, sortDirection]);
+  return filtered;
+}, [usersWithRoles, searchTerm, userSortField, sortDirection]);
 
   const filteredAndSortedRoles = useMemo(() => {
     let filtered = rolesWithStats.filter(role =>
@@ -892,7 +912,7 @@ const handleDeleteRole = async (role: UserRole) => {
                               <div className="flex items-center space-x-2 mb-1">
                                 <div className="w-8 h-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full flex items-center justify-center">
                                   <span className="text-white font-medium text-xs">
-                                    {user.firstName.charAt(0)}{user.lastName.charAt(0)}
+                                    {/* {user.firstName?.charAt(0)}{user.lastName?.charAt(0)} */}
                                   </span>
                                 </div>
                                 <div>
@@ -1010,7 +1030,7 @@ const handleDeleteRole = async (role: UserRole) => {
                                 <div className="flex items-center space-x-3">
                                   <div className="w-8 h-8 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full flex items-center justify-center">
                                     <span className="text-white font-medium text-xs">
-                                      {user.firstName.charAt(0)}{user.lastName.charAt(0)}
+                                      {/* {user.firstName?.charAt(0)}{user?.lastName.charAt(0)} */}
                                     </span>
                                   </div>
                                   <div>

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { X, Plus, Edit, Trash2, FileText, Calendar, ArrowRightLeft, Download, Search, ChevronUp, ChevronDown, ChevronRight, ChevronLeft, Eye, User, CheckCircle, Clock, AlertCircle } from 'lucide-react';
 import { showSuccess, showValidationError, showWarning } from '../utils/alerts';
-import { Prefinancing, BudgetLine, Grant, PREFINANCING_STATUS, BankAccount, SubBudgetLine } from '../types';
+import { Prefinancing, BudgetLine, Grant, PREFINANCING_STATUS, SubBudgetLine } from '../types';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { usePermissions } from '../hooks/usePermissions';
@@ -12,8 +12,8 @@ interface PrefinancingManagerProps {
   prefinancings: Prefinancing[];
   budgetLines: BudgetLine[];
   subBudgetLines: SubBudgetLine[];
+  allGrants?: Grant[];
   grants: Grant[];
-  bankAccounts: BankAccount[];
   onAddPrefinancing: (prefinancing: Omit<Prefinancing, 'id'>) => void;
   onUpdatePrefinancing: (id: string, updates: Partial<Prefinancing>) => void;
   onAddPrefinancingRepayment: (prefinancingId: string, repayment: { date: string; amount: number; reference: string }) => void;
@@ -23,8 +23,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
   prefinancings,
   budgetLines,
   subBudgetLines,
+  allGrants = [],
   grants,
-  bankAccounts,
   onAddPrefinancing,
   onUpdatePrefinancing,
   onAddPrefinancingRepayment
@@ -67,7 +67,6 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     date: new Date().toISOString().split('T')[0],
     expectedRepaymentDate: '',
     purpose: 'specific_expenses' as Prefinancing['purpose'],
-    targetBankAccount: '',
     targetGrant: '',
     status: 'pending' as Prefinancing['status']
   });
@@ -205,6 +204,14 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
 
       onUpdatePrefinancing(prefinancing.id, updates);
       showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
+      
+      // 🎯 NOUVEAU : Fermer automatiquement le popup de modification après signature
+      // Seulement si on est en mode édition (editingPrefinancing existe)
+      if (editingPrefinancing) {
+        setTimeout(() => {
+          resetForm(); // Cette fonction ferme le popup
+        }, 1000); // Attendre 1 seconde pour que l'utilisateur voie le message de succès
+      }
     }
     
     // Réinitialiser les observations après signature
@@ -416,8 +423,9 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     return grants.find(grant => grant.id === grantId);
   };
 
-  const getBankAccount = (accountId: string) => {
-    return bankAccounts.find(account => account.id === accountId);
+  const getBankAccountFromGrant = (grantId: string) => {
+    const grant = grants.find(g => g.id === grantId);
+    return grant?.bankAccount; // Retourne directement l'objet JSON bankAccount
   };
 
   const getTotalRepaid = (prefinancing: Prefinancing) => {
@@ -443,7 +451,6 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
       date: new Date().toISOString().split('T')[0],
       expectedRepaymentDate: '',
       purpose: 'specific_expenses',
-      targetBankAccount: '',
       targetGrant: '',
       status: 'pending'
     });
@@ -470,6 +477,52 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     });
     setShowRepaymentForm(false);
     setSelectedPrefinancing(null);
+  };
+
+
+  // 🎯 FONCTIONS DE TRÉSORERIE POUR LES PRÉFINANCEMENTS
+
+  // Récupère le solde bancaire de la subvention
+  const getGrantBankBalance = (grantId: string): number => {
+    const grant = grants.find(g => g.id === grantId);
+    return grant?.bankAccount?.balance || 0;
+  };
+
+  // Calcul des paiements non encaissés (chèques/virements) pour une subvention
+  const getUncashedPaymentsForGrant = (grantId: string): number => {
+    // Cette fonction devrait être importée ou calculée à partir des données de paiements
+    // Pour l'instant, retourner 0 comme placeholder
+    return 0;
+  };
+
+  // Calcul du total des préfinancements actifs pour une subvention
+  const getActivePrefinancingsTotal = (grantId: string): number => {
+    const activePrefinancings = prefinancings.filter(p => 
+      p.grantId === grantId && 
+      (p.status === 'active' || p.status === 'paid' || p.status === 'approved')
+    );
+    return activePrefinancings.reduce((sum, p) => sum + p.amount, 0);
+  };
+
+  // Calcul du solde disponible AVANT le préfinancement
+  const getAvailableBeforePrefinancing = (grantId: string): number => {
+    const bankBalance = getGrantBankBalance(grantId);
+    const uncashedAmount = getUncashedPaymentsForGrant(grantId);
+    const activePrefinancingsTotal = getActivePrefinancingsTotal(grantId);
+    return bankBalance - uncashedAmount - activePrefinancingsTotal;
+  };
+
+  // Calcul du solde disponible APRÈS le préfinancement
+  const getBalanceAfterPrefinancing = (grantId: string, prefinancingAmount: number): number => {
+    const availableBefore = getAvailableBeforePrefinancing(grantId);
+    return availableBefore - (parseFloat(prefinancingAmount.toString()) || 0);
+  };
+
+  // Calcul du pourcentage de trésorerie disponible
+  const getCashAvailabilityPercentage = (grantId: string): number => {
+    const bankBalance = getGrantBankBalance(grantId);
+    const availableBefore = getAvailableBeforePrefinancing(grantId);
+    return bankBalance > 0 ? (availableBefore / bankBalance) * 100 : 0;
   };
 
   // 🎯 MODIFICATION : Gestionnaire de soumission du formulaire
@@ -503,7 +556,68 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
       return;
     }
 
-    // 🎯 MODIFICATION IMPORTANTE : Préparation des données d'approbation
+
+    // 🎯 VÉRIFICATION TRÉSORERIE - Seulement pour les nouveaux préfinancements
+    if (!editingPrefinancing) {
+      const prefinancingAmount = parseFloat(formData.amount);
+      const bankBalance = getGrantBankBalance(formData.grantId);
+      const availableBefore = getAvailableBeforePrefinancing(formData.grantId);
+      const balanceAfter = getBalanceAfterPrefinancing(formData.grantId, prefinancingAmount);
+      const activePrefinancingsTotal = getActivePrefinancingsTotal(formData.grantId);
+      
+      // Vérification solde insuffisant
+      if (balanceAfter < 0) {
+        showValidationError(
+          'Solde insuffisant', 
+          `Le solde disponible (${formatCurrency(availableBefore, formData.grantId)}) est insuffisant pour ce préfinancement de ${formatCurrency(prefinancingAmount, formData.grantId)}.`
+        );
+        return;
+      }
+      
+      // Avertissement si le solde devient faible (moins de 30% du montant du préfinancement)
+      if (balanceAfter < prefinancingAmount * 0.3) {
+        const confirmProceed = window.confirm(
+          `⚠️ Attention : Après ce préfinancement, le solde disponible sera faible (${formatCurrency(balanceAfter, formData.grantId)}).\n` +
+          `Cela représente seulement ${((balanceAfter / prefinancingAmount) * 100).toFixed(1)}% du montant préfinancé.\n` +
+          `Voulez-vous vraiment continuer ?`
+        );
+        
+        if (!confirmProceed) {
+          return;
+        }
+      }
+      
+      // Avertissement si le total des préfinancements actifs dépasse 40% du solde bancaire
+      const totalPrefinancingsAfter = activePrefinancingsTotal + prefinancingAmount;
+      
+      if (totalPrefinancingsAfter > bankBalance * 0.4) {
+        const confirmProceed = window.confirm(
+          `⚠️ Attention : Le total des préfinancements (${formatCurrency(totalPrefinancingsAfter, formData.grantId)}) dépassera 40% du solde bancaire (${formatCurrency(bankBalance, formData.grantId)}).\n` +
+          `Cela représente ${((totalPrefinancingsAfter / bankBalance) * 100).toFixed(1)}% de la trésorerie.\n` +
+          `Continuer ?`
+        );
+        
+        if (!confirmProceed) {
+          return;
+        }
+      }
+      
+      // Avertissement si le préfinancement dépasse 20% du solde bancaire
+      if (prefinancingAmount > bankBalance * 0.2) {
+        const confirmProceed = window.confirm(
+          `⚠️ Attention : Ce préfinancement représente ${((prefinancingAmount / bankBalance) * 100).toFixed(1)}% du solde bancaire.\n` +
+          `Les préfinancements importants peuvent affecter la liquidité de la subvention.\n` +
+          `Continuer ?`
+        );
+        
+        if (!confirmProceed) {
+          return;
+        }
+      }
+    }
+
+
+
     // Pour les NOUVEAUX préfinancements, on enregistre seulement les signatures validées
     const approvalData: any = {};
     
@@ -548,7 +662,6 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
         date: formData.date,
         expectedRepaymentDate: formData.expectedRepaymentDate,
         purpose: formData.purpose,
-        targetBankAccount: formData.targetBankAccount || undefined,
         targetGrant: formData.targetGrant || undefined,
         status: formData.status,
         expenses: validExpenses.map(exp => ({
@@ -573,7 +686,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
         date: formData.date,
         expectedRepaymentDate: formData.expectedRepaymentDate,
         purpose: formData.purpose,
-        targetBankAccount: formData.targetBankAccount || undefined,
+        // targetBankAccount: formData.targetBankAccount || undefined,
         targetGrant: formData.targetGrant || undefined,
         status: formData.status,
         expenses: validExpenses.map(exp => ({
@@ -694,15 +807,17 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
     }
   };
 
-  const getGrantBankBalance = (grantId: string) => {
-    const grant = grants.find(g => g.id === grantId);
-    return grant ? grant.totalAmount * 0.3 : 0;
-  };
+  // const getGrantBankBalance = (grantId: string) => {
+  //   const grant = grants.find(g => g.id === grantId);
+  //   return grant ? grant.totalAmount * 0.3 : 0;
+  // };
 
   // 🎯 MODIFICATION : Génération du contenu PDF avec logo
   const generateMainPDFContent = () => {
     const selectedGrant = getSelectedGrant();
-    const targetBankAccount = formData.targetBankAccount ? getBankAccount(formData.targetBankAccount) : null;
+    const targetBankAccount = formData.targetGrant 
+    ? getGrant(formData.targetGrant)?.bankAccount 
+    : null;
     const targetGrant = formData.targetGrant ? getGrant(formData.targetGrant) : null;
 
     return `
@@ -786,11 +901,19 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
           </div>
 
           <!-- Destination spécifique -->
-          ${formData.purpose === 'other_accounts' && targetBankAccount ? `
+          ${formData.purpose === 'other_accounts' && formData.targetGrant ? `
+          <%
+            const targetGrant = getGrant(formData.targetGrant);
+            const targetBankAccount = formData.targetGrant 
+            ? getGrant(formData.targetGrant)?.bankAccount 
+            : null;
+          %>
           <div>
-            <strong>Compte bancaire de destination:</strong>
+            <strong>Subvention et compte bancaire de destination:</strong>
             <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
-              ${targetBankAccount.name} - ${targetBankAccount.bankName} (${targetBankAccount.accountNumber})
+              ${targetGrant?.name} (${targetGrant?.reference})<br/>
+              ${targetBankAccount?.bankName || 'Banque non spécifiée'} - 
+              ${targetBankAccount?.accountNumber || 'N/A'}
             </div>
           </div>
           ` : ''}
@@ -1356,6 +1479,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                                 onChange={(e) => updatePrefinancingStatus(prefinancing.id, e.target.value as Prefinancing['status'])}
                                 className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PREFINANCING_STATUS[prefinancing.status].color}`}
                               >
+                                <option value="">Selectionnez</option>
                                 <option value="paid">Décaissé</option>
                                 <option value="repaid">Remboursé</option>
                               </select>
@@ -1398,7 +1522,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                                   date: prefinancingToEdit.date,
                                   expectedRepaymentDate: prefinancingToEdit.expectedRepaymentDate,
                                   purpose: prefinancingToEdit.purpose,
-                                  targetBankAccount: prefinancingToEdit.targetBankAccount || '',
+                                  // targetBankAccount: prefinancingToEdit.targetBankAccount || '',
                                   targetGrant: prefinancingToEdit.targetGrant || '',
                                   status: prefinancingToEdit.status
                                 });
@@ -1440,10 +1564,18 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                             <button
                               onClick={() => setViewingPrefinancing(prefinancing)}
                               className="p-2 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
-                              title="Voir les détails"
+                              title="Voir tous les détails"
                             >
                               <Eye className="w-4 h-4" />
                             </button>
+                            
+                            // <button
+                            //   onClick={() => setViewingPrefinancing(prefinancing)}
+                            //   className="p-2 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+                            //   title="Voir les détails"
+                            // >
+                            //   <Eye className="w-4 h-4" />
+                            // </button>
                           )}
                         </div>
                       </td>
@@ -1454,6 +1586,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                       <tr className="bg-blue-50">
                         <td colSpan={7} className="px-4 py-4">
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                            {/* Détails du préfinancement */}
                             <div>
                               <h4 className="font-medium text-gray-900 mb-2">Détails du préfinancement</h4>
                               <div className="space-y-1">
@@ -1463,14 +1596,184 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                                 <p><span className="font-medium">Date de création:</span> {new Date(prefinancing.date).toLocaleDateString('fr-FR')}</p>
                               </div>
                             </div>
+                            
+                            {/* Informations financières */}
                             <div>
                               <h4 className="font-medium text-gray-900 mb-2">Informations financières</h4>
                               <div className="space-y-1">
                                 <p><span className="font-medium">Montant total:</span> {formatCurrency(prefinancing.amount, prefinancing.grantId)}</p>
                                 <p><span className="font-medium">Déjà remboursé:</span> {formatCurrency(totalRepaid, prefinancing.grantId)}</p>
                                 <p><span className="font-medium">Reste à rembourser:</span> {formatCurrency(remainingAmount, prefinancing.grantId)}</p>
-                                <p><span className="font-medium">Statut:</span> <span className={`px-2 py-1 text-xs font-medium rounded-full ${PREFINANCING_STATUS[prefinancing.status].color}`}>{PREFINANCING_STATUS[prefinancing.status].label}</span></p>
+                                <p>
+                                  <span className="font-medium">Statut:</span>{' '}
+                                  <span className={`px-2 py-1 text-xs font-medium rounded-full ${PREFINANCING_STATUS[prefinancing.status].color}`}>
+                                    {PREFINANCING_STATUS[prefinancing.status].label}
+                                  </span>
+                                </p>
                               </div>
+                              
+                              {/* Section Destination du Préfinancement (uniquement pour other_accounts et between_grants) */}
+                              {(prefinancing.purpose === 'other_accounts' || prefinancing.purpose === 'between_grants') && (
+                                <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-4 border border-blue-200 mt-4">
+                                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                                    <ArrowRightLeft className="w-5 h-5 mr-2 text-blue-600" />
+                                    Destination du Préfinancement
+                                  </h3>
+                                  
+                                  {/* Pour "Autres comptes bancaires" */}
+                                  {prefinancing.purpose === 'other_accounts' && prefinancing.targetGrant && (
+                                    <div className="space-y-3">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <h4 className="font-medium text-gray-800">Transfert vers autre compte bancaire</h4>
+                                        <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
+                                          Autre compte
+                                        </span>
+                                      </div>
+                                      
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                          <label className="block text-sm font-medium text-gray-600">Subvention de destination</label>
+                                          <div className="mt-1 p-3 bg-white rounded-lg border border-gray-200">
+                                            {(() => {
+                                              const targetGrant = [...allGrants, ...grants].find(g => g.id === prefinancing.targetGrant);
+                                              return (
+                                                <>
+                                                  <p className="font-medium text-gray-900">
+                                                    {targetGrant?.name || 'Subvention inconnue'}
+                                                  </p>
+                                                  <p className="text-sm text-gray-600">
+                                                    {targetGrant?.reference || ''}
+                                                  </p>
+                                                </>
+                                              );
+                                            })()}
+                                          </div>
+                                        </div>
+                                        
+                                        <div>
+                                          <label className="block text-sm font-medium text-gray-600">Compte bancaire de destination</label>
+                                          <div className="mt-1 p-3 bg-white rounded-lg border border-gray-200">
+                                            {(() => {
+                                              const targetGrant = [...allGrants, ...grants].find(g => g.id === prefinancing.targetGrant);
+                                              if (!targetGrant?.bankAccount) {
+                                                return <p className="text-gray-500">Aucun compte bancaire associé</p>;
+                                              }
+                                              return (
+                                                <>
+                                                  <p className="font-medium text-gray-900">
+                                                    {targetGrant.bankAccount.name || 'Compte sans nom'}
+                                                  </p>
+                                                  <p className="text-sm text-gray-600">
+                                                    {targetGrant.bankAccount.bankName || 'Banque non spécifiée'}
+                                                  </p>
+                                                  {targetGrant.bankAccount.accountNumber && (
+                                                    <p className="text-sm text-gray-500">
+                                                      N°: {targetGrant.bankAccount.accountNumber}
+                                                    </p>
+                                                  )}
+                                                  {targetGrant.bankAccount.balance !== undefined && (
+                                                    <p className="text-sm text-green-600 mt-1">
+                                                      Solde: {formatCurrency(targetGrant.bankAccount.balance, prefinancing.grantId)}
+                                                    </p>
+                                                  )}
+                                                </>
+                                              );
+                                            })()}
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                  
+                                  {/* Pour "Entre subventions" */}
+                                  {prefinancing.purpose === 'between_grants' && prefinancing.targetGrant && (
+                                    <div className="space-y-3">
+                                      <div className="flex items-center justify-between mb-2">
+                                        <h4 className="font-medium text-gray-800">Transfert entre subventions</h4>
+                                        <span className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded-full">
+                                          Entre subventions
+                                        </span>
+                                      </div>
+                                      
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                          <label className="block text-sm font-medium text-gray-600">Subvention source</label>
+                                          <div className="mt-1 p-3 bg-white rounded-lg border border-gray-200">
+                                            {(() => {
+                                              const sourceGrant = [...allGrants, ...grants].find(g => g.id === prefinancing.grantId);
+                                              return (
+                                                <>
+                                                  <p className="font-medium text-gray-900">
+                                                    {sourceGrant?.name || 'Subvention source inconnue'}
+                                                  </p>
+                                                  <p className="text-sm text-gray-600">
+                                                    Devise: {sourceGrant?.currency || 'N/A'}
+                                                  </p>
+                                                </>
+                                              );
+                                            })()}
+                                          </div>
+                                        </div>
+                                        
+                                        <div>
+                                          <label className="block text-sm font-medium text-gray-600">Subvention de destination</label>
+                                          <div className="mt-1 p-3 bg-white rounded-lg border border-gray-200">
+                                            {(() => {
+                                              const targetGrant = [...allGrants, ...grants].find(g => g.id === prefinancing.targetGrant);
+                                              return (
+                                                <>
+                                                  <p className="font-medium text-gray-900">
+                                                    {targetGrant?.name || 'Subvention inconnue'}
+                                                  </p>
+                                                  <div className="flex flex-col mt-1">
+                                                    <span className="text-sm text-gray-600">
+                                                      Référence: {targetGrant?.reference || 'N/A'}
+                                                    </span>
+                                                    <span className="text-sm text-gray-600">
+                                                      Devise: {targetGrant?.currency || 'N/A'}
+                                                    </span>
+                                                    <span className="text-sm text-green-600 mt-1">
+                                                      Montant reçu: {formatCurrency(prefinancing.amount, prefinancing.grantId)}
+                                                    </span>
+                                                  </div>
+                                                </>
+                                              );
+                                            })()}
+                                          </div>
+                                        </div>
+                                      </div>
+                                      
+                                      {/* Informations de conversion (si devises différentes) */}
+                                      {(() => {
+                                        const sourceGrant = [...allGrants, ...grants].find(g => g.id === prefinancing.grantId);
+                                        const targetGrant = [...allGrants, ...grants].find(g => g.id === prefinancing.targetGrant);
+                                        
+                                        if (sourceGrant && targetGrant && sourceGrant.currency !== targetGrant.currency) {
+                                          return (
+                                            <div className="mt-3 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                                              <div className="flex items-center">
+                                                <AlertCircle className="w-4 h-4 text-yellow-600 mr-2" />
+                                                <span className="font-medium text-yellow-800">Conversion de devise</span>
+                                              </div>
+                                              <p className="text-sm text-yellow-700 mt-1">
+                                                Le transfert implique une conversion de {sourceGrant.currency} vers {targetGrant.currency}
+                                              </p>
+                                            </div>
+                                          );
+                                        }
+                                        return null;
+                                      })()}
+                                    </div>
+                                  )}
+                                  
+                                  {/* Message si aucune destination spécifiée */}
+                                  {(prefinancing.purpose === 'other_accounts' || prefinancing.purpose === 'between_grants') && !prefinancing.targetGrant && (
+                                    <div className="text-center py-4">
+                                      <p className="text-gray-600">Destination non spécifiée</p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -1624,7 +1927,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 {/* <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Ligne budgétaire (optionnel)
@@ -1641,9 +1944,9 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                         </option>
                       ))}
                     </select>
-                  </div>
+                  </div> 
 
-                  <div>
+                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Sous-ligne budgétaire (optionnel)
                     </label>
@@ -1660,8 +1963,8 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                         </option>
                       ))}
                     </select>
-                  </div>
-                </div>
+                  </div> 
+                </div> */}
 
                 {/* Informations de la subvention source */}
                 {formData.grantId && (
@@ -1686,6 +1989,238 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                   </div>
                 )}
 
+
+                {/* 🎯 SECTION ANALYSE DE TRÉSORERIE */}
+                {formData.grantId && (
+                  <div className="bg-gradient-to-r from-yellow-50 to-orange-50 rounded-xl p-6 border-2 border-yellow-200 shadow-sm">
+                    <div className="flex items-center justify-between mb-4">
+                      <h4 className="text-lg font-semibold text-gray-900 flex items-center">
+                        <AlertCircle className="w-5 h-5 mr-2 text-yellow-600" />
+                        Analyse de Trésorerie
+                      </h4>
+                      <span className="text-xs font-medium px-2 py-1 bg-yellow-100 text-yellow-800 rounded-full">
+                        Contrôle de solvabilité
+                      </span>
+                    </div>
+
+                    {(() => {
+                      const selectedGrantObj = getSelectedGrant();
+                      const prefinancingAmount = parseFloat(formData.amount) || 0;
+                      const bankBalance = getGrantBankBalance(formData.grantId);
+                      const availableBefore = getAvailableBeforePrefinancing(formData.grantId);
+                      const balanceAfter = getBalanceAfterPrefinancing(formData.grantId, prefinancingAmount);
+                      const cashAvailability = getCashAvailabilityPercentage(formData.grantId);
+                      const activePrefinancingsTotal = getActivePrefinancingsTotal(formData.grantId);
+                      const totalAfter = activePrefinancingsTotal + prefinancingAmount;
+                      
+                      return (
+                        <div className="space-y-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {/* Situation Actuelle */}
+                            <div className="space-y-3">
+                              <h5 className="font-medium text-gray-800">Situation Actuelle</h5>
+                              <div className="space-y-2 text-sm">
+                                <div className="flex justify-between items-center py-1">
+                                  <span className="text-gray-600">Solde bancaire :</span>
+                                  <span className="font-medium text-blue-600">
+                                    {formatCurrency(bankBalance, formData.grantId)}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between items-center py-1">
+                                  <span className="text-gray-600">Préfinancements actifs :</span>
+                                  <span className="font-medium text-purple-600">
+                                    -{formatCurrency(activePrefinancingsTotal, formData.grantId)}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between items-center py-1 border-t border-gray-200 pt-2">
+                                  <span className="text-gray-700 font-medium">Disponible actuel :</span>
+                                  <span className={`font-bold text-lg ${availableBefore >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {formatCurrency(availableBefore, formData.grantId)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Impact du Préfinancement */}
+                            <div className="space-y-3">
+                              <h5 className="font-medium text-gray-800">Impact du Préfinancement</h5>
+                              <div className="space-y-2 text-sm">
+                                <div className="flex justify-between items-center py-1">
+                                  <span className="text-gray-600">Montant demandé :</span>
+                                  <span className="font-medium text-blue-600">
+                                    {formatCurrency(prefinancingAmount, formData.grantId)}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between items-center py-1">
+                                  <span className="text-gray-600">Nouveau total préfinancements :</span>
+                                  <span className="font-medium text-purple-600">
+                                    {formatCurrency(totalAfter, formData.grantId)}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between items-center py-1 border-t border-gray-200 pt-2">
+                                  <span className="text-gray-700 font-medium">Disponible après :</span>
+                                  <span className={`font-bold text-lg ${balanceAfter >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {formatCurrency(balanceAfter, formData.grantId)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Indicateurs de Risque */}
+                          <div className="mt-4 pt-4 border-t border-gray-200">
+                            <h5 className="font-medium text-gray-800 mb-3">Indicateurs de Risque</h5>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              {/* Indicateur 1 : Solde disponible */}
+                              <div className={`p-3 rounded-lg border ${
+                                balanceAfter >= prefinancingAmount * 2 
+                                  ? 'bg-green-50 border-green-200' 
+                                  : balanceAfter >= 0 
+                                  ? 'bg-yellow-50 border-yellow-200' 
+                                  : 'bg-red-50 border-red-200'
+                              }`}>
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-xs font-medium text-gray-700">Solde après préfinancement</span>
+                                  <div className={`w-3 h-3 rounded-full ${
+                                    balanceAfter >= prefinancingAmount * 2 ? 'bg-green-500' :
+                                    balanceAfter >= 0 ? 'bg-yellow-500' : 'bg-red-500'
+                                  }`}></div>
+                                </div>
+                                <p className={`text-sm font-bold ${
+                                  balanceAfter >= prefinancingAmount * 2 ? 'text-green-700' :
+                                  balanceAfter >= 0 ? 'text-yellow-700' : 'text-red-700'
+                                }`}>
+                                  {formatCurrency(balanceAfter, formData.grantId)}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {balanceAfter >= 0 ? 
+                                    (balanceAfter >= prefinancingAmount * 2 ? '✅ Trésorerie confortable' : '⚠️ Trésorerie limitée') 
+                                    : '❌ Déficit de trésorerie'}
+                                </p>
+                              </div>
+
+                              {/* Indicateur 2 : Ratio préfinancements/solde */}
+                              <div className={`p-3 rounded-lg border ${
+                                totalAfter <= bankBalance * 0.2 
+                                  ? 'bg-green-50 border-green-200' 
+                                  : totalAfter <= bankBalance * 0.4 
+                                  ? 'bg-yellow-50 border-yellow-200' 
+                                  : 'bg-red-50 border-red-200'
+                              }`}>
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-xs font-medium text-gray-700">Préfinancements / Solde</span>
+                                  <div className={`w-3 h-3 rounded-full ${
+                                    totalAfter <= bankBalance * 0.2 ? 'bg-green-500' :
+                                    totalAfter <= bankBalance * 0.4 ? 'bg-yellow-500' : 'bg-red-500'
+                                  }`}></div>
+                                </div>
+                                <p className={`text-sm font-bold ${
+                                  totalAfter <= bankBalance * 0.2 ? 'text-green-700' :
+                                  totalAfter <= bankBalance * 0.4 ? 'text-yellow-700' : 'text-red-700'
+                                }`}>
+                                  {bankBalance > 0 ? ((totalAfter / bankBalance) * 100).toFixed(1) : '0'}%
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {totalAfter <= bankBalance * 0.2 ? '✅ Faible exposition' :
+                                  totalAfter <= bankBalance * 0.4 ? '⚠️ Exposition modérée' : '❌ Exposition élevée'}
+                                </p>
+                              </div>
+
+                              {/* Indicateur 3 : Taux de disponibilité */}
+                              <div className={`p-3 rounded-lg border ${
+                                cashAvailability >= 50 
+                                  ? 'bg-green-50 border-green-200' 
+                                  : cashAvailability >= 20 
+                                  ? 'bg-yellow-50 border-yellow-200' 
+                                  : 'bg-red-50 border-red-200'
+                              }`}>
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-xs font-medium text-gray-700">Disponibilité trésorerie</span>
+                                  <div className={`w-3 h-3 rounded-full ${
+                                    cashAvailability >= 50 ? 'bg-green-500' :
+                                    cashAvailability >= 20 ? 'bg-yellow-500' : 'bg-red-500'
+                                  }`}></div>
+                                </div>
+                                <p className={`text-sm font-bold ${
+                                  cashAvailability >= 50 ? 'text-green-700' :
+                                  cashAvailability >= 20 ? 'text-yellow-700' : 'text-red-700'
+                                }`}>
+                                  {cashAvailability.toFixed(1)}%
+                                </p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {cashAvailability >= 50 ? '✅ Excellente disponibilité' :
+                                  cashAvailability >= 20 ? '⚠️ Disponibilité correcte' : '❌ Disponibilité faible'}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Messages d'alerte */}
+                          <div className="mt-4">
+                            {balanceAfter < 0 && (
+                              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                                <div className="flex items-center">
+                                  <AlertCircle className="w-5 h-5 text-red-500 mr-2" />
+                                  <span className="font-medium text-red-700">Solde insuffisant</span>
+                                </div>
+                                <p className="text-sm text-red-600 mt-1">
+                                  Le préfinancement entraînerait un déficit de trésorerie de {formatCurrency(Math.abs(balanceAfter), formData.grantId)}.
+                                </p>
+                              </div>
+                            )}
+                            
+                            {balanceAfter >= 0 && balanceAfter < prefinancingAmount * 0.5 && (
+                              <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                                <div className="flex items-center">
+                                  <AlertCircle className="w-5 h-5 text-yellow-500 mr-2" />
+                                  <span className="font-medium text-yellow-700">Trésorerie limitée</span>
+                                </div>
+                                <p className="text-sm text-yellow-600 mt-1">
+                                  Le solde restant ({formatCurrency(balanceAfter, formData.grantId)}) est faible par rapport au montant du préfinancement.
+                                </p>
+                              </div>
+                            )}
+                            
+                            {totalAfter > bankBalance * 0.4 && (
+                              <div className="p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                                <div className="flex items-center">
+                                  <AlertCircle className="w-5 h-5 text-orange-500 mr-2" />
+                                  <span className="font-medium text-orange-700">Exposition élevée</span>
+                                </div>
+                                <p className="text-sm text-orange-600 mt-1">
+                                  Les préfinancements représentent {((totalAfter / bankBalance) * 100).toFixed(1)}% du solde bancaire.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Recommandations */}
+                          {prefinancingAmount > 0 && (
+                            <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                              <h6 className="font-medium text-blue-800 mb-2">Recommandations :</h6>
+                              <ul className="text-sm text-blue-700 space-y-1">
+                                {balanceAfter < 0 && (
+                                  <li>• ⛔ Réduire le montant du préfinancement ou reporter la demande</li>
+                                )}
+                                {balanceAfter >= 0 && balanceAfter < prefinancingAmount && (
+                                  <li>• ⚠️ Considérer un montant plus faible ou un échéancier de remboursement plus court</li>
+                                )}
+                                {totalAfter > bankBalance * 0.3 && (
+                                  <li>• 🏦 Renforcer la trésorerie avant d'effectuer de nouveaux préfinancements</li>
+                                )}
+                                {balanceAfter >= prefinancingAmount * 2 && (
+                                  <li>• ✅ La trésorerie est suffisante pour ce préfinancement</li>
+                                )}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
+
                 {/* Destination du préfinancement */}
                 <div>
                   <div className="mt-4">
@@ -1694,7 +2229,13 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                     </label>
                     <select
                       value={formData.purpose}
-                      onChange={(e) => setFormData(prev => ({ ...prev, purpose: e.target.value as Prefinancing['purpose'] }))}
+                      onChange={(e) => setFormData(prev => ({ 
+                        ...prev, 
+                        purpose: e.target.value as Prefinancing['purpose'],
+                        // Réinitialiser les champs de destination quand on change d'objet
+                        targetBankAccount: '',
+                        targetGrant: ''
+                      }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       required
                     >
@@ -1704,48 +2245,69 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                     </select>
                   </div>
 
-                  <div className="mt-4">
-                    {formData.purpose === 'other_accounts' ? (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Compte bancaire de destination *
-                        </label>
-                        <select
-                          value={formData.targetBankAccount}
-                          onChange={(e) => setFormData(prev => ({ ...prev, targetBankAccount: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          required
-                        >
-                          <option value="">Sélectionner un compte</option>
-                          {bankAccounts.map(account => (
-                            <option key={account.id} value={account.id}>
-                              {account.name} - {account.bankName}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                    ) : formData.purpose === 'between_grants' ? (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Subvention de destination *
-                        </label>
-                        <select
-                          value={formData.targetGrant}
-                          onChange={(e) => setFormData(prev => ({ ...prev, targetGrant: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                          required
-                        >
-                          <option value="">Sélectionner une subvention</option>
-                          {grants.filter(grant => grant.id !== formData.grantId).map(grant => (
+                  {/* DESTINATION POUR "Autres comptes bancaires" */}
+                  {formData.purpose === 'other_accounts' && (
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Subvention et compte bancaire de destination *
+                      </label>
+                      <select
+                        value={formData.targetGrant}  // CHANGER ICI
+                        onChange={(e) => setFormData(prev => ({ 
+                          ...prev, 
+                          targetGrant: e.target.value  // CHANGER ICI
+                        }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        required
+                      >
+                        <option value="">Sélectionner une subvention avec compte bancaire</option>
+                        {allGrants
+                          .filter(grant => 
+                            grant.id !== formData.grantId && // Exclure la subvention source
+                            grant.bankAccount && // Uniquement celles avec compte bancaire
+                            (grant.status === 'active' || grant.status === 'pending') // Actives ou en attente
+                          )
+                          .map(grant => (
                             <option key={grant.id} value={grant.id}>
-                              {grant.name} ({grant.reference})
+                              {grant.name} - {grant.bankAccount?.name || 'Compte'} 
+                              ({grant.bankAccount?.bankName || 'Banque'}) - 
+                              {grant.bankAccount?.accountNumber ? ` ${grant.bankAccount.accountNumber}` : ''} - 
+                              {grant.currency}
                             </option>
                           ))}
-                        </select>
-                      </div>
-                    ) : null}
-                  </div>
+                      </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        L'argent sera transféré vers le compte bancaire de la subvention sélectionnée
+                      </p>
+                    </div>
+                  )}
+
+                  {/* DESTINATION POUR "Transfert entre subventions" */}
+                  {formData.purpose === 'between_grants' && (
+                    <div className="mt-4">
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Subvention de destination *
+                      </label>
+                      <select
+                        value={formData.targetGrant}
+                        onChange={(e) => setFormData(prev => ({ 
+                          ...prev, 
+                          targetGrant: e.target.value 
+                        }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        required
+                      >
+                        <option value="">Sélectionner une subvention</option>
+                        {allGrants
+                          .filter(grant => grant.id !== formData.grantId && grant.status === 'active')
+                          .map(grant => (
+                            <option key={grant.id} value={grant.id}>
+                              {grant.name} ({grant.reference}) - {grant.currency}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
@@ -1784,7 +2346,7 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Date prévisionnelle de remboursement *
+                      Date prévisionnelle de remboursement*
                     </label>
                     <input
                       type="date"
@@ -2277,14 +2839,34 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                   onClick={resetForm}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
                 >
-                  Annuler
+                  Fermer
                 </button>
+
                 <button
+                  type="submit"
+                  disabled={editingPrefinancing && userProfession !== 'Comptable'}
+                  className={`flex-1 px-6 py-3 rounded-xl font-medium transition-all duration-200 ${
+                    editingPrefinancing && userProfession !== 'Comptable'
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
+                  }`}
+                >
+                  {editingPrefinancing ? (
+                    <>
+                      {userProfession === 'Comptable' 
+                        ? 'Modifier le préfinancement' 
+                        : 'Modification réservée au comptable'
+                      }
+                    </>
+                  ) : 'Créer le Préfinancement'}
+                </button> 
+
+                {/* <button
                   type="submit"
                   className="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-3 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200"
                 >
                   {editingPrefinancing ? 'Modifier' : 'Créer'} le Préfinancement
-                </button>
+                </button> */}
               </div>
             </form>
           </div>
@@ -2437,10 +3019,244 @@ const PrefinancingManager: React.FC<PrefinancingManagerProps> = ({
                 </div>
               </div>
 
-              <div>
+              {/* Section Destination du Préfinancement pour other_accounts et between_grants */}
+              {(viewingPrefinancing.purpose === 'other_accounts' || viewingPrefinancing.purpose === 'between_grants') && (
+                <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl p-6 border border-blue-200 mt-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <ArrowRightLeft className="w-5 h-5 mr-2 text-blue-600" />
+                    Destination du Préfinancement
+                  </h3>
+                  
+                  {/* Pour "Autres comptes bancaires" */}
+                  {viewingPrefinancing.purpose === 'other_accounts' && viewingPrefinancing.targetGrant && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-medium text-gray-800">Transfert vers autre compte bancaire</h4>
+                        <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
+                          Autre compte
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-600 mb-2">Subvention de destination</label>
+                          <div className="p-3 bg-white rounded-lg border border-gray-200">
+                            {(() => {
+                              const targetGrant = [...allGrants, ...grants].find(g => g.id === viewingPrefinancing.targetGrant);
+                              return (
+                                <>
+                                  <p className="font-medium text-gray-900">
+                                    {targetGrant?.name || 'Subvention inconnue'}
+                                  </p>
+                                  <p className="text-sm text-gray-600">
+                                    {targetGrant?.reference || ''}
+                                  </p>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-gray-600 mb-2">Compte bancaire de destination</label>
+                          <div className="p-3 bg-white rounded-lg border border-gray-200">
+                            {(() => {
+                              const targetGrant = [...allGrants, ...grants].find(g => g.id === viewingPrefinancing.targetGrant);
+                              if (!targetGrant?.bankAccount) {
+                                return <p className="text-gray-500">Aucun compte bancaire associé</p>;
+                              }
+                              return (
+                                <>
+                                  <p className="font-medium text-gray-900">
+                                    {targetGrant.bankAccount.name || 'Compte sans nom'}
+                                  </p>
+                                  <p className="text-sm text-gray-600">
+                                    {targetGrant.bankAccount.bankName || 'Banque non spécifiée'}
+                                  </p>
+                                  {targetGrant.bankAccount.accountNumber && (
+                                    <p className="text-sm text-gray-500">
+                                      N°: {targetGrant.bankAccount.accountNumber}
+                                    </p>
+                                  )}
+                                  {targetGrant.bankAccount.balance !== undefined && (
+                                    <p className="text-sm text-green-600 mt-1">
+                                      Solde: {formatCurrency(targetGrant.bankAccount.balance, viewingPrefinancing.grantId)}
+                                    </p>
+                                  )}
+                                </>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Pour "Entre subventions" */}
+                  {viewingPrefinancing.purpose === 'between_grants' && viewingPrefinancing.targetGrant && (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="font-medium text-gray-800">Transfert entre subventions</h4>
+                        <span className="px-2 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded-full">
+                          Entre subventions
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-600 mb-2">Subvention source</label>
+                          <div className="p-3 bg-white rounded-lg border border-gray-200">
+                            {(() => {
+                              const sourceGrant = [...allGrants, ...grants].find(g => g.id === viewingPrefinancing.grantId);
+                              return (
+                                <>
+                                  <p className="font-medium text-gray-900">
+                                    {sourceGrant?.name || 'Subvention source inconnue'}
+                                  </p>
+                                  <p className="text-sm text-gray-600">
+                                    Devise: {sourceGrant?.currency || 'N/A'}
+                                  </p>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-gray-600 mb-2">Subvention de destination</label>
+                          <div className="p-3 bg-white rounded-lg border border-gray-200">
+                            {(() => {
+                              const targetGrant = [...allGrants, ...grants].find(g => g.id === viewingPrefinancing.targetGrant);
+                              return (
+                                <>
+                                  <p className="font-medium text-gray-900">
+                                    {targetGrant?.name || 'Subvention inconnue'}
+                                  </p>
+                                  <div className="flex flex-col mt-1">
+                                    <span className="text-sm text-gray-600">
+                                      Référence: {targetGrant?.reference || 'N/A'}
+                                    </span>
+                                    <span className="text-sm text-gray-600">
+                                      Devise: {targetGrant?.currency || 'N/A'}
+                                    </span>
+                                    <span className="text-sm text-green-600 mt-1">
+                                      Montant reçu: {formatCurrency(viewingPrefinancing.amount, viewingPrefinancing.grantId)}
+                                    </span>
+                                  </div>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Informations de conversion (si devises différentes) */}
+                      {(() => {
+                        const sourceGrant = [...allGrants, ...grants].find(g => g.id === viewingPrefinancing.grantId);
+                        const targetGrant = [...allGrants, ...grants].find(g => g.id === viewingPrefinancing.targetGrant);
+                        
+                        if (sourceGrant && targetGrant && sourceGrant.currency !== targetGrant.currency) {
+                          return (
+                            <div className="mt-4 p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                              <div className="flex items-center">
+                                <AlertCircle className="w-4 h-4 text-yellow-600 mr-2" />
+                                <span className="font-medium text-yellow-800">Conversion de devise</span>
+                              </div>
+                              <p className="text-sm text-yellow-700 mt-1">
+                                Le transfert implique une conversion de {sourceGrant.currency} vers {targetGrant.currency}
+                              </p>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+                  )}
+                  
+                  {/* Message si aucune destination spécifiée */}
+                  {(viewingPrefinancing.purpose === 'other_accounts' || viewingPrefinancing.purpose === 'between_grants') && !viewingPrefinancing.targetGrant && (
+                    <div className="text-center py-4">
+                      <p className="text-gray-600">Destination non spécifiée</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* <div>
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">Description</h3>
                 <div className="p-4 bg-gray-50 rounded-lg">
                   <p className="text-sm text-gray-900">{viewingPrefinancing.description}</p>
+                </div>
+              </div> */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Description détaillée */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Description</h3>
+                  <div className="p-4 bg-gray-50 rounded-lg h-full">
+                    <p className="text-sm text-gray-900">{viewingPrefinancing.description}</p>
+                  </div>
+                </div>
+                
+                {/* Statut et informations complémentaires */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">Statut et Suivi</h3>
+                  <div className="space-y-3">
+                    <div className="p-3 bg-blue-50 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-gray-700">Statut</span>
+                        <span className={`px-2 py-1 text-xs font-medium rounded-full ${PREFINANCING_STATUS[viewingPrefinancing.status].color}`}>
+                          {PREFINANCING_STATUS[viewingPrefinancing.status].label}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1">
+                        Créé le {new Date(viewingPrefinancing.date).toLocaleDateString('fr-FR')}
+                      </p>
+                    </div>
+                    
+                    <div className="p-3 bg-green-50 rounded-lg">
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-medium text-gray-700">Date prévue de remboursement</span>
+                        <span className="text-sm font-bold text-blue-600">
+                          {new Date(viewingPrefinancing.expectedRepaymentDate).toLocaleDateString('fr-FR')}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-1">
+                        {(() => {
+                          const today = new Date();
+                          const repaymentDate = new Date(viewingPrefinancing.expectedRepaymentDate);
+                          const diffDays = Math.ceil((repaymentDate - today) / (1000 * 60 * 60 * 24));
+                          
+                          if (diffDays > 0) {
+                            return `${diffDays} jour(s) restant(s)`;
+                          } else if (diffDays === 0) {
+                            return "Échéance aujourd'hui";
+                          } else {
+                            return `En retard de ${Math.abs(diffDays)} jour(s)`;
+                          }
+                        })()}
+                      </p>
+                    </div>
+                    
+                    {/* Progression du remboursement */}
+                    <div className="p-3 bg-yellow-50 rounded-lg">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-gray-700">Progression du remboursement</span>
+                        <span className="text-sm font-bold text-green-600">
+                          {((getTotalRepaid(viewingPrefinancing) / viewingPrefinancing.amount) * 100).toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-green-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${(getTotalRepaid(viewingPrefinancing) / viewingPrefinancing.amount) * 100}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-xs text-gray-600 mt-2 flex justify-between">
+                        <span>Déjà remboursé: {formatCurrency(getTotalRepaid(viewingPrefinancing), viewingPrefinancing.grantId)}</span>
+                        <span>Reste: {formatCurrency(getRemainingAmount(viewingPrefinancing), viewingPrefinancing.grantId)}</span>
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
 

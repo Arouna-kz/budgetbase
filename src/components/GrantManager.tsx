@@ -55,6 +55,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
     endDate: '',
     status: 'pending' as Grant['status'],
     description: '',
+    // Champs pour les informations bancaires (stockées dans JSON bank_account)
     bankAccountName: '',
     accountNumber: '',
     bankName: '',
@@ -222,13 +223,14 @@ const GrantManager: React.FC<GrantManagerProps> = ({
     const notifiedAmount = parseFloat(formData.totalAmount);
     const initialBalance = parseFloat(formData.initialBalance) || 0;
 
-    // Préparer l'objet bankAccount
+    // 🎯 MODIFICATION : Préparer l'objet bankAccount pour le champ JSON
     const bankAccount = (formData.bankAccountName || formData.accountNumber || formData.bankName) ? {
-      name: formData.bankAccountName,
-      accountNumber: formData.accountNumber,
-      bankName: formData.bankName,
-      balance: initialBalance
-    } : undefined;
+      name: formData.bankAccountName || '',
+      accountNumber: formData.accountNumber || '',
+      bankName: formData.bankName || '',
+      balance: initialBalance,
+      lastUpdateDate: new Date().toISOString().split('T')[0]
+    } : null;
 
     if (editingGrant) {
       // Logique de modification avec répartition proportionnelle
@@ -297,6 +299,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
         endDate: formData.endDate,
         status: formData.status,
         description: formData.description,
+        // 🎯 MODIFICATION : Envoyer le JSON bankAccount directement
         bankAccount: bankAccount
       });
 
@@ -315,6 +318,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
         endDate: formData.endDate,
         status: formData.status,
         description: formData.description,
+        // 🎯 MODIFICATION : Envoyer le JSON bankAccount directement
         bankAccount: bankAccount
       });
       showSuccess('Subvention créée', 'La subvention a été créée avec succès');
@@ -341,6 +345,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
       endDate: grant.endDate,
       status: grant.status,
       description: grant.description || '',
+      // 🎯 MODIFICATION : Charger depuis le JSON bank_account
       bankAccountName: grant.bankAccount?.name || '',
       accountNumber: grant.bankAccount?.accountNumber || '',
       bankName: grant.bankAccount?.bankName || '',
@@ -749,7 +754,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                 />
               </div>
 
-              {/* Informations du compte bancaire */}
+              {/* 🎯 MODIFICATION : Informations du compte bancaire (dans JSON) */}
               <div className="bg-green-50 rounded-xl p-4 md:p-6">
                 <h4 className="text-lg font-semibold text-gray-900 mb-4">Informations du Compte Bancaire (Optionnel)</h4>
                 
@@ -1039,7 +1044,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                       </div>
                     </div>
 
-                    {/* Informations du compte bancaire */}
+                    {/* 🎯 MODIFICATION : Informations du compte bancaire (depuis JSON) */}
                     {grant.bankAccount && (
                       <div className="mt-4 bg-green-50 rounded-xl p-4 border border-green-200">
                         <h4 className="font-medium text-green-900 mb-3">Compte Bancaire Associé</h4>
@@ -1063,6 +1068,13 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                           <p className="text-sm text-green-700 font-medium">Numéro de compte</p>
                           <p className="text-green-900 font-mono text-sm break-all">{grant.bankAccount.accountNumber}</p>
                         </div>
+                        {grant.bankAccount.lastUpdateDate && (
+                          <div className="mt-2">
+                            <p className="text-xs text-green-600">
+                              Dernière mise à jour: {grant.bankAccount.lastUpdateDate}
+                            </p>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Edit, Trash2, Users, Calendar, DollarSign, CheckCircle, Clock, Download, Printer, X, Search, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, AlertCircle, FileText, Eye } from 'lucide-react';
+import { Plus, Edit, Trash2, Users, Calendar, AlertTriangle, DollarSign, CheckCircle, Clock, Download, Printer, X, Search, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, AlertCircle, FileText, Eye } from 'lucide-react';
 import { showSuccess, showValidationError, showWarning } from '../utils/alerts';
-import { EmployeeLoan, BudgetLine, Grant, LOAN_STATUS, SubBudgetLine } from '../types';
+import { EmployeeLoan, BudgetLine, Grant, LOAN_STATUS, SubBudgetLine, Payment } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../hooks/useAuth';
 import html2canvas from 'html2canvas';
@@ -14,6 +14,7 @@ interface EmployeeLoanManagerProps {
   subBudgetLines: SubBudgetLine[];
   grants: Grant[];
   selectedGrantId?: string;
+  payments: Payment[];
   onAddLoan: (loan: Omit<EmployeeLoan, 'id'>) => void;
   onUpdateLoan: (id: string, updates: Partial<EmployeeLoan>) => void;
   onAddRepayment: (loanId: string, repayment: { date: string; amount: number; reference: string }) => void;
@@ -25,6 +26,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   subBudgetLines,
   grants,
   selectedGrantId,
+  payments,
   onAddLoan,
   onUpdateLoan,
   onAddRepayment
@@ -214,7 +216,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const canEdit = hasPermission('employee_loans', 'edit');
   const canDelete = hasPermission('employee_loans', 'delete');
   const canView = hasPermission('employee_loans', 'view');
-  const canApprove = hasPermission('employee_loans', 'approve');
+  // const canApprove = hasPermission('employee_loans', 'edit');
 
   // Vérifier si la subvention sélectionnée est active
   const activeGrant = grants.find(grant => grant.status === 'active');
@@ -306,6 +308,15 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
 
       onUpdateLoan(loan.id, updates);
       showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
+      
+      // 🎯 NOUVEAU : Fermer automatiquement le popup de modification après signature
+      // Seulement si on est en mode édition (editingLoan existe)
+      if (editingLoan) {
+        setTimeout(() => {
+          resetForm(); // Cette fonction ferme le popup
+        }, 1000); // Attendre 1 seconde pour que l'utilisateur voie le message de succès
+      }
+      
     } else {
       // Cas d'un nouveau prêt
       const updatedApproval = {
@@ -329,6 +340,59 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
       [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
     }));
   };
+  // const handleSignLoan = (loan: EmployeeLoan | null, signatureType: string) => {
+  //   if (!canSignLoan(loan, signatureType)) {
+  //     if (signatureType === 'finalApproval') {
+  //       showWarning('Signature impossible', 'Les signatures du Coordinateur de la Subvention et du Comptable sont requises avant votre signature');
+  //     } else {
+  //       showWarning('Permission refusée', 'Vous ne pouvez pas signer ce prêt');
+  //     }
+  //     return;
+  //   }
+
+  //   // Logique de signature simplifiée
+  //   if (loan) {
+  //     // Cas d'un prêt existant
+  //     const updates: Partial<EmployeeLoan> = {
+  //       approvals: { ...loan.approvals }
+  //     };
+
+  //     // Appliquer la signature
+  //     updates.approvals = {
+  //       ...updates.approvals,
+  //       [signatureType]: {
+  //         name: userFullName,
+  //         date: new Date().toISOString().split('T')[0],
+  //         signature: true,
+  //         observation: approvals[signatureType as keyof typeof approvals].observation
+  //       }
+  //     };
+
+  //     onUpdateLoan(loan.id, updates);
+  //     showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
+  //   } else {
+  //     // Cas d'un nouveau prêt
+  //     const updatedApproval = {
+  //       name: userFullName,
+  //       date: new Date().toISOString().split('T')[0],
+  //       signature: true,
+  //       observation: approvals[signatureType as keyof typeof approvals].observation
+  //     };
+
+  //     setApprovals(prev => ({
+  //       ...prev,
+  //       [signatureType]: updatedApproval
+  //     }));
+      
+  //     showSuccess('Signature préparée', 'Votre signature sera enregistrée avec le nouveau prêt');
+  //   }
+    
+  //   // Réinitialiser les observations
+  //   setApprovals(prev => ({
+  //     ...prev,
+  //     [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
+  //   }));
+  // };
 
   // Fonction pour basculer l'affichage des observations
   const toggleObservation = (signatureType: string) => {
@@ -408,6 +472,12 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     const remainingAmount = getRemainingAmount(loan);
     const progress = getRepaymentProgress(loan);
 
+    // Calculs de trésorerie
+    const bankBalance = getGrantBankBalance(loan.grantId);
+    const uncashedAmount = getTotalUncashedAmount(loan.grantId);
+    const availableBefore = getAvailableBeforeLoan(loan.grantId);
+    const balanceAfter = getBalanceAfterLoan(loan.grantId, loan.amount);
+
     return `
       <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;">
         <!-- Header -->
@@ -435,6 +505,33 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
             <div>
               <strong>Matricule:</strong>
               <div class="form-field">${loan.employee.employeeId}</div>
+            </div>
+          </div>
+        </div>
+
+         <!-- Analyse de Trésorerie (ajoutez cette section) -->
+        <div class="section">
+          <h3 style="color: #2c5aa0; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 16px;">
+            Analyse de Trésorerie
+          </h3>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+            <div>
+              <strong>Solde bancaire:</strong>
+              <div class="form-field">${formatCurrency(bankBalance, loan.grantId)}</div>
+            </div>
+            <div>
+              <strong>Paiements non encaissés:</strong>
+              <div class="form-field">${formatCurrency(uncashedAmount, loan.grantId)}</div>
+            </div>
+            <div>
+              <strong>Disponible avant prêt:</strong>
+              <div class="form-field">${formatCurrency(availableBefore, loan.grantId)}</div>
+            </div>
+            <div>
+              <strong>Impact du prêt:</strong>
+              <div class="form-field ${balanceAfter < 0 ? 'text-red-600' : 'text-green-600'}">
+                ${formatCurrency(loan.amount, loan.grantId)}
+              </div>
             </div>
           </div>
         </div>
@@ -789,6 +886,56 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     setShowForm(true);
   };
 
+
+  // 🎯 FONCTIONS DE TRÉSORERIE POUR LES PRÊTS
+
+  // Récupère le solde bancaire de la subvention
+  const getGrantBankBalance = (grantId: string): number => {
+    const grant = grants.find(g => g.id === grantId);
+    return grant?.bankAccount?.balance || 0;
+  };
+
+  // Calcul des paiements non encaissés (chèques/virements)
+  const getUncashedPayments = (grantId: string): Payment[] => {
+    // Utilisez le payments passé en props au composant
+    if (!payments) return [];
+    
+    return payments.filter(p => 
+      p.grantId === grantId &&
+      p.status === 'paid' && 
+      (p.paymentMethod === 'check' || p.paymentMethod === 'transfer') && 
+      !p.cashedDate
+    );
+  };
+
+  const getTotalUncashedAmount = (grantId: string): number => {
+    const uncashedPayments = getUncashedPayments(grantId);
+    return uncashedPayments.reduce((sum, p) => sum + p.amount, 0);
+  };
+
+  // Calcul du solde disponible AVANT le prêt
+  const getAvailableBeforeLoan = (grantId: string): number => {
+    const bankBalance = getGrantBankBalance(grantId);
+    const uncashedAmount = getTotalUncashedAmount(grantId);
+    return bankBalance - uncashedAmount;
+  };
+
+  // Calcul du solde disponible APRÈS le prêt
+  const getBalanceAfterLoan = (grantId: string, loanAmount: number): number => {
+    const availableBefore = getAvailableBeforeLoan(grantId);
+    return availableBefore - (parseFloat(loanAmount.toString()) || 0);
+  };
+
+  // Calcul des prêts en cours (non remboursés)
+  const getActiveLoansTotal = (grantId: string): number => {
+    const activeLoans = loans.filter(loan => 
+      loan.grantId === grantId && 
+      (loan.status === 'active' || loan.status === 'approved')
+    );
+    return activeLoans.reduce((sum, loan) => sum + loan.amount, 0);
+  };
+
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -811,6 +958,50 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     if (!formData.grantId || !formData.amount || !formData.employeeName || !formData.employeeId) {
       showValidationError('Champs obligatoires manquants', 'Veuillez remplir la subvention, le montant, le nom et le matricule de l\'employé');
       return;
+    }
+
+    // 🎯 VÉRIFICATION TRÉSORERIE - Seulement pour les nouveaux prêts
+    if (!editingLoan) {
+      const loanAmount = parseFloat(formData.amount);
+      const availableBefore = getAvailableBeforeLoan(formData.grantId);
+      const balanceAfter = getBalanceAfterLoan(formData.grantId, loanAmount);
+      const activeLoansTotal = getActiveLoansTotal(formData.grantId);
+      
+      // Vérification solde insuffisant
+      if (balanceAfter < 0) {
+        showValidationError(
+          'Solde insuffisant', 
+          `Le solde disponible (${formatCurrency(availableBefore, formData.grantId)}) est insuffisant pour ce prêt de ${formatCurrency(loanAmount, formData.grantId)}.`
+        );
+        return;
+      }
+      
+      // Avertissement si le solde devient faible (moins de 20% du montant du prêt)
+      if (balanceAfter < loanAmount * 0.2) {
+        const confirmProceed = window.confirm(
+          `⚠️ Attention : Après ce prêt, le solde disponible sera faible (${formatCurrency(balanceAfter, formData.grantId)}).\n` +
+          `Voulez-vous vraiment continuer ?`
+        );
+        
+        if (!confirmProceed) {
+          return;
+        }
+      }
+      
+      // Avertissement si le total des prêts actifs dépasse 30% du solde bancaire
+      const bankBalance = getGrantBankBalance(formData.grantId);
+      const totalLoansAfter = activeLoansTotal + loanAmount;
+      
+      if (totalLoansAfter > bankBalance * 0.3) {
+        const confirmProceed = window.confirm(
+          `⚠️ Attention : Le total des prêts (${formatCurrency(totalLoansAfter, formData.grantId)}) dépassera 30% du solde bancaire (${formatCurrency(bankBalance, formData.grantId)}).\n` +
+          `Continuer ?`
+        );
+        
+        if (!confirmProceed) {
+          return;
+        }
+      }
     }
 
     // Si on est en mode édition
@@ -931,10 +1122,10 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   };
 
   const updateLoanStatus = (loanId: string, newStatus: EmployeeLoan['status']) => {
-    if (!canApprove) {
-      showWarning('Permission refusée', 'Vous n\'avez pas la permission de modifier le statut des prêts');
-      return;
-    }
+    // if (!canApprove) {
+    //   showWarning('Permission refusée', 'Vous n\'avez pas la permission de modifier le statut des prêts');
+    //   return;
+    // }
     onUpdateLoan(loanId, { status: newStatus });
   };
 
@@ -1214,6 +1405,106 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                 </div>
               </div>
 
+
+              {/* Analyse de Trésorerie */}
+              {formData.grantId && (
+                <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-200">
+                  <h4 className="text-lg font-semibold text-gray-900 mb-4">Analyse de Trésorerie</h4>
+                  
+                  {(() => {
+                    const selectedGrantObj = grants.find(g => g.id === formData.grantId);
+                    const loanAmount = parseFloat(formData.amount) || 0;
+                    const bankBalance = getGrantBankBalance(formData.grantId);
+                    const uncashedAmount = getTotalUncashedAmount(formData.grantId);
+                    const availableBefore = getAvailableBeforeLoan(formData.grantId);
+                    const balanceAfter = getBalanceAfterLoan(formData.grantId, loanAmount);
+                    const activeLoansTotal = getActiveLoansTotal(formData.grantId);
+                    const totalLoansAfter = activeLoansTotal + loanAmount;
+                    
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-3">
+                          <h5 className="font-medium text-gray-800">Situation Bancaire</h5>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Solde bancaire :</span>
+                              <span className="font-medium">{formatCurrency(bankBalance, formData.grantId)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Chèques/virements non encaissés :</span>
+                              <span className="font-medium text-orange-600">-{formatCurrency(uncashedAmount, formData.grantId)}</span>
+                            </div>
+                            <div className="flex justify-between border-t pt-2">
+                              <span className="text-gray-700 font-medium">Disponible actuel :</span>
+                              <span className={`font-bold ${availableBefore >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {formatCurrency(availableBefore, formData.grantId)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          <h5 className="font-medium text-gray-800">Impact du Prêt</h5>
+                          <div className="space-y-2 text-sm">
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Prêts en cours :</span>
+                              <span className="font-medium">{formatCurrency(activeLoansTotal, formData.grantId)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Montant du prêt :</span>
+                              <span className="font-medium text-blue-600">{formatCurrency(loanAmount, formData.grantId)}</span>
+                            </div>
+                            <div className="flex justify-between border-t pt-2">
+                              <span className="text-gray-700 font-medium">Solde après prêt :</span>
+                              <span className={`font-bold ${balanceAfter >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {formatCurrency(balanceAfter, formData.grantId)}
+                              </span>
+                            </div>
+                          </div>
+                          
+                          {/* Indicateurs de risque */}
+                          {loanAmount > 0 && (
+                            <div className="mt-4 space-y-2">
+                              {/* Risque solde insuffisant */}
+                              {balanceAfter < 0 && (
+                                <div className="flex items-center space-x-2 text-red-600 text-xs">
+                                  <AlertCircle className="w-4 h-4" />
+                                  <span>❌ Solde insuffisant après le prêt</span>
+                                </div>
+                              )}
+                              
+                              {/* Risque solde faible */}
+                              {balanceAfter >= 0 && balanceAfter < loanAmount * 0.2 && (
+                                <div className="flex items-center space-x-2 text-orange-600 text-xs">
+                                  <AlertTriangle className="w-4 h-4" />
+                                  <span>⚠️ Solde faible après le prêt</span>
+                                </div>
+                              )}
+                              
+                              {/* Risque concentration de prêts */}
+                              {totalLoansAfter > bankBalance * 0.3 && (
+                                <div className="flex items-center space-x-2 text-yellow-600 text-xs">
+                                  <AlertTriangle className="w-4 h-4" />
+                                  <span>⚠️ Concentration élevée de prêts</span>
+                                </div>
+                              )}
+                              
+                              {/* Bonne santé */}
+                              {balanceAfter >= loanAmount * 0.5 && totalLoansAfter <= bankBalance * 0.2 && (
+                                <div className="flex items-center space-x-2 text-green-600 text-xs">
+                                  <CheckCircle className="w-4 h-4" />
+                                  <span>✓ Trésorerie saine</span>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
               {/* Loan Information */}
               <div className="bg-blue-50 rounded-xl p-4">
                 <h4 className="text-lg font-semibold text-gray-900 mb-4">Informations du Prêt</h4>
@@ -1238,7 +1529,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                     </select>
                   </div>
 
-                  <div>
+                  {/* <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Ligne budgétaire (optionnel)
                     </label>
@@ -1254,10 +1545,10 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                         </option>
                       ))}
                     </select>
-                  </div>
+                  </div> */}
                 </div>
 
-                <div className="mt-4">
+                {/* <div className="mt-4">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Sous-ligne budgétaire (optionnel)
                   </label>
@@ -1274,7 +1565,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                       </option>
                     ))}
                   </select>
-                </div>
+                </div> */}
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                   <div>
@@ -1310,7 +1601,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
 
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Date prévisionnelle de remboursement *
+                      Date prévisionnelle de remboursement*
                     </label>
                     <input
                       type="date"
@@ -1609,14 +1900,34 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                   onClick={resetForm}
                   className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
                 >
-                  Annuler
+                  Fermer
                 </button>
+
                 <button
+                  type="submit"
+                  disabled={editingLoan && userProfession !== 'Comptable'}
+                  className={`flex-1 px-6 py-3 rounded-xl font-medium transition-all duration-200 ${
+                    editingLoan && userProfession !== 'Comptable'
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-green-600 to-blue-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
+                  }`}
+                >
+                  {editingLoan ? (
+                    <>
+                      {userProfession === 'Comptable' 
+                        ? 'Modifier le Prêt' 
+                        : 'Modification réservée au comptable'
+                      }
+                    </>
+                  ) : 'Enregistrer le Prêt'}
+                </button>
+
+                {/* <button
                   type="submit"
                   className="flex-1 bg-gradient-to-r from-green-600 to-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200"
                 >
                   {editingLoan ? 'Modifier le Prêt' : 'Enregistrer le Prêt'}
-                </button>
+                </button> */}
               </div>
             </form>
           </div>

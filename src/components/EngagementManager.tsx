@@ -69,6 +69,10 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     status: 'pending' as Engagement['status']
   });
 
+  // État pour stocker le montant disponible
+  const [availableAmount, setAvailableAmount] = useState<number>(0);
+  const [exceedsAvailableAmount, setExceedsAvailableAmount] = useState<boolean>(false);
+
   const [approvals, setApprovals] = useState({
     supervisor1: { name: '', signature: false, observation: '' },
     supervisor2: { name: '', signature: false, observation: '' },
@@ -189,6 +193,71 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     }
   }, [userProfile]);
 
+  // EFFET POUR CALCULER LE MONTANT DISPONIBLE LORSQUE LA SOUS-LIGNE EST SÉLECTIONNÉE
+  useEffect(() => {
+    if (formData.subBudgetLineId) {
+      calculateAvailableAmount();
+    } else {
+      setAvailableAmount(0);
+      setExceedsAvailableAmount(false);
+    }
+  }, [formData.subBudgetLineId, formData.amount, editingEngagement?.id]);
+
+  // Fonction pour calculer le montant disponible pour la sous-ligne sélectionnée
+  const calculateAvailableAmount = () => {
+    const subBudgetLine = subBudgetLines.find(line => line.id === formData.subBudgetLineId);
+    
+    if (!subBudgetLine) {
+      setAvailableAmount(0);
+      return;
+    }
+
+    // Trouver la ligne budgétaire parente
+    const parentBudgetLine = budgetLines.find(line => line.id === subBudgetLine.budgetLineId);
+    
+    if (!parentBudgetLine) {
+      setAvailableAmount(subBudgetLine.notifiedAmount || 0);
+      return;
+    }
+
+    // Calculer le total déjà engagé pour cette sous-ligne
+    let totalEngaged = 0;
+    
+    // Si on est en mode édition, exclure l'engagement actuel du calcul
+    const relevantEngagements = editingEngagement 
+      ? engagements.filter(eng => eng.id !== editingEngagement.id)
+      : engagements;
+    
+    relevantEngagements.forEach(engagement => {
+      if (engagement.subBudgetLineId === formData.subBudgetLineId) {
+        // Vérifier si l'engagement est annulé ou rejeté
+        if (engagement.status !== 'cancelled' && engagement.status !== 'rejected') {
+          totalEngaged += engagement.amount;
+        }
+      }
+    });
+
+    // Calculer le montant disponible
+    const available = (subBudgetLine.notifiedAmount || 0) - totalEngaged;
+    setAvailableAmount(available > 0 ? available : 0);
+
+    // Vérifier si le montant saisi dépasse le disponible
+    const amountValue = parseFloat(formData.amount) || 0;
+    if (amountValue > 0 && amountValue > available) {
+      setExceedsAvailableAmount(true);
+    } else {
+      setExceedsAvailableAmount(false);
+    }
+  };
+
+  // Fonction pour formater le montant
+  const formatAmount = (amount: number, currency: string = 'EUR') => {
+    return amount.toLocaleString('fr-FR', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    });
+  };
+
   // PERMISSIONS
   const canCreate = hasPermission('engagements', 'create');
   const canEdit = hasPermission('engagements', 'edit');
@@ -254,6 +323,14 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
       onUpdateEngagement(engagement.id, updates);
       showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès');
+      
+      // 🎯 NOUVEAU : Fermer automatiquement le popup de modification après signature
+      // Seulement si on est en mode édition (editingEngagement existe)
+      if (editingEngagement) {
+        setTimeout(() => {
+          resetForm(); // Cette fonction ferme le popup
+        }, 1000); // Attendre 1 seconde pour que l'utilisateur voie le message de succès
+      }
     }
     
     // Réinitialiser les observations après signature
@@ -262,6 +339,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       [signatureType]: { ...prev[signatureType as keyof typeof approvals], observation: '' }
     }));
   };
+
+  
 
   // Fonction pour signer un nouvel engagement (création)
   const handleSignNewEngagement = (signatureType: string) => {
@@ -318,8 +397,24 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       supervisor2: false,
       finalApproval: false
     });
+    setAvailableAmount(0);
+    setExceedsAvailableAmount(false);
     setShowForm(false);
     setEditingEngagement(null);
+  };
+
+  // Gestionnaire de changement pour le montant
+  const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setFormData(prev => ({ ...prev, amount: value }));
+    
+    // Vérifier si le montant dépasse le disponible
+    const amountValue = parseFloat(value) || 0;
+    if (amountValue > 0 && amountValue > availableAmount) {
+      setExceedsAvailableAmount(true);
+    } else {
+      setExceedsAvailableAmount(false);
+    }
   };
 
   // Soumission du formulaire
@@ -345,6 +440,13 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     // Validation des champs obligatoires
     if (!formData.grantId || !formData.budgetLineId || !formData.subBudgetLineId || !formData.amount || !formData.description || !formData.supplier) {
       showValidationError('Champs obligatoires manquants', 'Veuillez remplir tous les champs obligatoires');
+      return;
+    }
+
+    // 🎯 VÉRIFICATION DU MONTANT DISPONIBLE
+    const amountValue = parseFloat(formData.amount);
+    if (amountValue > availableAmount) {
+      showWarning('Montant insuffisant', `Le montant saisi (${formatAmount(amountValue)} ${getCurrencySymbol(selectedGrant?.currency || 'EUR')}) dépasse le montant disponible (${formatAmount(availableAmount)} ${getCurrencySymbol(selectedGrant?.currency || 'EUR')}) pour cette sous-ligne budgétaire.`);
       return;
     }
 
@@ -485,6 +587,27 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
   const getGrant = (grantId: string) => {
     return grants.find(grant => grant.id === grantId);
+  };
+
+  // Calculer le montant disponible pour une sous-ligne spécifique
+  const getAvailableAmountForSubLine = (subBudgetLineId: string): number => {
+    const subBudgetLine = subBudgetLines.find(line => line.id === subBudgetLineId);
+    if (!subBudgetLine) return 0;
+
+    // Calculer le total déjà engagé pour cette sous-ligne
+    const totalEngaged = engagements
+      .filter(eng => eng.subBudgetLineId === subBudgetLineId && eng.status !== 'cancelled' && eng.status !== 'rejected')
+      .reduce((sum, eng) => sum + eng.amount, 0);
+
+    const available = (subBudgetLine.notifiedAmount || 0) - totalEngaged;
+    return available > 0 ? available : 0;
+  };
+
+  // Obtenir le montant total engagé pour une sous-ligne
+  const getTotalEngagedForSubLine = (subBudgetLineId: string): number => {
+    return engagements
+      .filter(eng => eng.subBudgetLineId === subBudgetLineId && eng.status !== 'cancelled' && eng.status !== 'rejected')
+      .reduce((sum, eng) => sum + eng.amount, 0);
   };
 
   // Historique des fournisseurs
@@ -633,6 +756,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     const subBudgetLine = getSubBudgetLine(engagement.subBudgetLineId);
     const grant = getGrant(engagement.grantId);
     const currencySymbol = getCurrencySymbol(grant?.currency || 'EUR');
+    const availableAmountForSubLine = getAvailableAmountForSubLine(engagement.subBudgetLineId);
+    const totalEngagedForSubLine = getTotalEngagedForSubLine(engagement.subBudgetLineId);
 
     return `
       <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px;">
@@ -681,6 +806,25 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
               <strong>Sous-Ligne Budgétaire:</strong>
               <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
                 ${subBudgetLine?.code || 'N/A'} - ${subBudgetLine?.name || 'Sous-ligne supprimée'}
+              </div>
+            </div>
+          </div>
+          
+          <!-- Informations financières de la sous-ligne -->
+          <div style="margin-top: 20px; padding: 15px; border: 1px solid #2c5aa0; border-radius: 6px; background: #f0f7ff;">
+            <h4 style="color: #2c5aa0; margin-bottom: 10px; font-size: 14px;">État financier de la sous-ligne</h4>
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+              <div style="text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Budget notifié</div>
+                <div style="font-weight: bold; color: #2c5aa0;">${formatAmount(subBudgetLine?.notifiedAmount || 0)} ${currencySymbol}</div>
+              </div>
+              <div style="text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Total engagé</div>
+                <div style="font-weight: bold; color: #d97706;">${formatAmount(totalEngagedForSubLine)} ${currencySymbol}</div>
+              </div>
+              <div style="text-align: center;">
+                <div style="font-size: 12px; color: #666; margin-bottom: 5px;">Disponible</div>
+                <div style="font-weight: bold; color: #059669;">${formatAmount(availableAmountForSubLine)} ${currencySymbol}</div>
               </div>
             </div>
           </div>
@@ -888,151 +1032,197 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   };
 
   // Rendu des champs manquants du formulaire
-  const renderFormFields = () => (
-    <>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Sous-ligne budgétaire *
-          </label>
-          <select
-            value={formData.subBudgetLineId}
-            onChange={(e) => setFormData(prev => ({ ...prev, subBudgetLineId: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-            disabled={!formData.budgetLineId}
-          >
-            <option value="">Sélectionner une sous-ligne</option>
-            {subBudgetLines.filter(line => line.budgetLineId === formData.budgetLineId).map(line => (
-              <option key={line.id} value={line.id}>
-                {line.code} - {line.name}
-              </option>
-            ))}
-          </select>
-        </div>
+  const renderFormFields = () => {
+    const subBudgetLine = getSubBudgetLine(formData.subBudgetLineId);
+    const totalEngaged = getTotalEngagedForSubLine(formData.subBudgetLineId);
+    const currencySymbol = getCurrencySymbol(selectedGrant?.currency || 'EUR');
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Date *
-          </label>
-          <input
-            type="date"
-            value={formData.date}
-            onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-          />
-        </div>
-      </div>
+    return (
+      <>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Sous-ligne budgétaire *
+            </label>
+            <select
+              value={formData.subBudgetLineId}
+              onChange={(e) => setFormData(prev => ({ ...prev, subBudgetLineId: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              required
+              disabled={!formData.budgetLineId}
+            >
+              <option value="">Sélectionner une sous-ligne</option>
+              {subBudgetLines.filter(line => line.budgetLineId === formData.budgetLineId).map(line => (
+                <option key={line.id} value={line.id}>
+                  {line.code} - {line.name} (Budget: {formatAmount(line.notifiedAmount || 0)} {currencySymbol})
+                </option>
+              ))}
+            </select>
+          </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Montant ({getCurrencySymbol(selectedGrant?.currency || 'EUR')}) *
-          </label>
-          <div className="relative">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Date *
+            </label>
             <input
-              type="number"
-              step="0.01"
-              min="0"
-              value={formData.amount}
-              onChange={(e) => setFormData(prev => ({ ...prev, amount: e.target.value }))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
-              placeholder="0.00"
+              type="date"
+              value={formData.date}
+              onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               required
             />
           </div>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Fournisseur *
-          </label>
-          <div className="flex items-center space-x-2">
-            <input
-              type="text"
-              value={formData.supplier}
-              onChange={(e) => setFormData(prev => ({ ...prev, supplier: e.target.value }))}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Nom du fournisseur"
-              required
-            />
-            {formData.supplier && (
-              <button
-                type="button"
-                onClick={() => showSupplierHistoryModal(formData.supplier)}
-                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                title="Voir l'historique du fournisseur"
-              >
-                <Eye className="w-5 h-5" />
-              </button>
+        {/* Affichage des informations financières de la sous-ligne */}
+        {formData.subBudgetLineId && subBudgetLine && (
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-200 mb-4">
+            <h4 className="font-medium text-gray-900 mb-3 flex items-center">
+              <FileText className="w-4 h-4 mr-2 text-blue-600" />
+              État financier de la sous-ligne
+            </h4>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="text-center">
+                <p className="text-xs text-gray-600 mb-1">Budget notifié</p>
+                <p className="text-lg font-bold text-blue-600">
+                  {formatAmount(subBudgetLine.notifiedAmount || 0)} {currencySymbol}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-gray-600 mb-1">Total engagé</p>
+                <p className="text-lg font-bold text-orange-600">
+                  {formatAmount(totalEngaged)} {currencySymbol}
+                </p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-gray-600 mb-1">Disponible</p>
+                <p className={`text-lg font-bold ${availableAmount > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  {formatAmount(availableAmount)} {currencySymbol}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Montant ({currencySymbol}) *
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                step="0.01"
+                min="0"
+                value={formData.amount}
+                onChange={handleAmountChange}
+                className={`w-full px-3 py-2 border ${exceedsAvailableAmount ? 'border-red-300' : 'border-gray-300'} rounded-lg focus:ring-2 ${exceedsAvailableAmount ? 'focus:ring-red-500' : 'focus:ring-blue-500'} focus:border-transparent pl-8`}
+                placeholder="0.00"
+                required
+              />
+              {exceedsAvailableAmount && (
+                <div className="absolute -bottom-6 left-0 text-xs text-red-600 font-medium">
+                  ⚠️ Montant supérieur au disponible ({formatAmount(availableAmount)} {currencySymbol})
+                </div>
+              )}
+            </div>
+            {formData.subBudgetLineId && availableAmount > 0 && (
+              <p className="text-xs text-gray-500 mt-1">
+                Disponible: {formatAmount(availableAmount)} {currencySymbol}
+              </p>
             )}
           </div>
-        </div>
-      </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Description *
-        </label>
-        <textarea
-          value={formData.description}
-          onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          rows={3}
-          placeholder="Description de l'engagement..."
-          required
-        />
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Référence du devis
-          </label>
-          <input
-            type="text"
-            value={formData.quoteReference}
-            onChange={(e) => setFormData(prev => ({ ...prev, quoteReference: e.target.value }))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            placeholder="Ex: DEV-2024-001"
-          />
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Fournisseur *
+            </label>
+            <div className="flex items-center space-x-2">
+              <input
+                type="text"
+                value={formData.supplier}
+                onChange={(e) => setFormData(prev => ({ ...prev, supplier: e.target.value }))}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Nom du fournisseur"
+                required
+              />
+              {formData.supplier && (
+                <button
+                  type="button"
+                  onClick={() => showSupplierHistoryModal(formData.supplier)}
+                  className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  title="Voir l'historique du fournisseur"
+                >
+                  <Eye className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
-            N° Facture
+            Description *
           </label>
-          <input
-            type="text"
-            value={formData.invoiceNumber}
-            onChange={(e) => setFormData(prev => ({ ...prev, invoiceNumber: e.target.value }))}
+          <textarea
+            value={formData.description}
+            onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            placeholder="Ex: FAC-2024-001"
+            rows={3}
+            placeholder="Description de l'engagement..."
+            required
           />
         </div>
-      </div>
-      
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">
-          Statut
-        </label>
-        <select
-          value={formData.status}
-          onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Engagement['status'] }))}
-          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-        >
-          <option value="pending">En attente</option>
-          {userProfession === "Coordonnateur National" && (
-            <>
-              <option value="approved">Approuvé</option>
-              <option value="rejected">Rejeté</option>
-            </>
-          )}
-        </select>
-      </div>
-    </>
-  );
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Référence du devis
+            </label>
+            <input
+              type="text"
+              value={formData.quoteReference}
+              onChange={(e) => setFormData(prev => ({ ...prev, quoteReference: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Ex: DEV-2024-001"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              N° Facture
+            </label>
+            <input
+              type="text"
+              value={formData.invoiceNumber}
+              onChange={(e) => setFormData(prev => ({ ...prev, invoiceNumber: e.target.value }))}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Ex: FAC-2024-001"
+            />
+          </div>
+        </div>
+        
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Statut
+          </label>
+          <select
+            value={formData.status}
+            onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Engagement['status'] }))}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="pending">En attente</option>
+            {userProfession === "Coordonnateur National" && (
+              <>
+                <option value="approved">Approuvé</option>
+                <option value="rejected">Rejeté</option>
+              </>
+            )}
+          </select>
+        </div>
+      </>
+    );
+  };
 
   // 🚨 VÉRIFICATIONS DE CHARGEMENT ET PERMISSIONS
   if (permissionsLoading) {
@@ -1580,14 +1770,39 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                   onClick={resetForm}
                   className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
                 >
-                  Annuler
+                  Fermer
                 </button>
+
                 <button
                   type="submit"
-                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition-colors"
+                  disabled={editingEngagement && userProfession !== 'Comptable' || exceedsAvailableAmount}
+                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                    (editingEngagement && userProfession !== 'Comptable') || exceedsAvailableAmount
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
+                >
+                  {editingEngagement ? (
+                    <>
+                      {userProfession === 'Comptable' 
+                        ? 'Modifier l\'engagement' 
+                        : 'Modification réservée au comptable'
+                      }
+                    </>
+                  ) : 'Ajouter'}
+                </button>
+
+                {/* <button
+                  type="submit"
+                  disabled={exceedsAvailableAmount}
+                  className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                    exceedsAvailableAmount
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-blue-600 text-white hover:bg-blue-700'
+                  }`}
                 >
                   {editingEngagement ? 'Modifier' : 'Ajouter'}
-                </button>
+                </button> */}
               </div>
             </form>
           </div>
@@ -1648,6 +1863,9 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                       </div>
                     </th>
                     <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Disponible
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Signatures
                     </th>
                     <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1663,6 +1881,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                     const budgetLine = getBudgetLine(engagement.budgetLineId);
                     const subBudgetLine = getSubBudgetLine(engagement.subBudgetLineId);
                     const grant = getGrant(engagement.grantId);
+                    const availableForSubLine = getAvailableAmountForSubLine(engagement.subBudgetLineId);
+                    const currencySymbol = getCurrencySymbol(grant?.currency || 'EUR');
                     
                     return (
                       <tr key={engagement.id} className="hover:bg-gray-50">
@@ -1688,6 +1908,9 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                             {truncateText(subBudgetLine?.name || 'Sous-ligne supprimée', 20)}
                           </div>
                           <div className="text-sm text-gray-500">{subBudgetLine?.code}</div>
+                          <div className="text-xs text-gray-400">
+                            {subBudgetLine ? `Budget: ${formatAmount(subBudgetLine.notifiedAmount || 0)} ${currencySymbol}` : ''}
+                          </div>
                         </td>
                         <td className="px-4 py-4">
                           <button
@@ -1700,6 +1923,16 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                         </td>
                         <td className="px-4 py-4 text-right text-sm font-medium text-gray-900">
                           {grant ? formatCurrency(engagement.amount, grant.currency) : engagement.amount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          <div className="flex flex-col items-center">
+                            <span className={`text-sm font-medium ${availableForSubLine > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              {formatAmount(availableForSubLine)} {currencySymbol}
+                            </span>
+                            {availableForSubLine < 100 && availableForSubLine > 0 && (
+                              <span className="text-xs text-orange-600 bg-orange-50 px-1 rounded mt-1">Faible</span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-4 text-center">
                           <div className="flex items-center justify-center space-x-2">
@@ -1962,14 +2195,40 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                     <label className="block text-sm font-medium text-gray-600">Ligne budgétaire</label>
                     {(() => {
                       const budgetLine = getBudgetLine(viewingEngagement.budgetLineId);
+                      const subBudgetLine = getSubBudgetLine(viewingEngagement.subBudgetLineId);
+                      const availableForSubLine = getAvailableAmountForSubLine(viewingEngagement.subBudgetLineId);
+                      const totalEngagedForSubLine = getTotalEngagedForSubLine(viewingEngagement.subBudgetLineId);
+                      
                       return (
-                        <div className="mt-1 p-3 bg-gray-50 rounded-lg">
+                        <div className="mt-1 p-3 bg-gray-50 rounded-lg space-y-2">
                           <p className="text-sm font-medium text-gray-900">{budgetLine?.name || 'Ligne supprimée'}</p>
                           <p className="text-xs text-gray-600">Code: {budgetLine?.code || 'N/A'}</p>
-                          {budgetLine && (
-                            <p className="text-xs text-gray-600">
-                              Budget: {formatCurrency(budgetLine.notifiedAmount, selectedGrant?.currency || 'EUR')}
-                            </p>
+                          {subBudgetLine && (
+                            <>
+                              <div className="pt-2 border-t border-gray-200">
+                                <p className="text-xs font-medium text-gray-600">Sous-ligne: {subBudgetLine.name}</p>
+                                <div className="grid grid-cols-2 gap-2 mt-2">
+                                  <div>
+                                    <p className="text-xs text-gray-600">Budget notifié:</p>
+                                    <p className="text-xs font-bold text-blue-600">
+                                      {formatAmount(subBudgetLine.notifiedAmount || 0)} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}
+                                    </p>
+                                  </div>
+                                  <div>
+                                    <p className="text-xs text-gray-600">Total engagé:</p>
+                                    <p className="text-xs font-bold text-orange-600">
+                                      {formatAmount(totalEngagedForSubLine)} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="mt-2">
+                                  <p className="text-xs text-gray-600">Disponible après cet engagement:</p>
+                                  <p className={`text-xs font-bold ${availableForSubLine > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {formatAmount(availableForSubLine)} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}
+                                  </p>
+                                </div>
+                              </div>
+                            </>
                           )}
                         </div>
                       );
@@ -1984,6 +2243,11 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                         <div className="mt-1 p-3 bg-gray-50 rounded-lg">
                           <p className="text-sm font-medium text-gray-900">{subBudgetLine?.name || 'Sous-ligne supprimée'}</p>
                           <p className="text-xs text-gray-600">Code: {subBudgetLine?.code || 'N/A'}</p>
+                          {subBudgetLine && (
+                            <p className="text-xs text-gray-600">
+                              Budget: {formatAmount(subBudgetLine.notifiedAmount || 0)} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}
+                            </p>
+                          )}
                         </div>
                       );
                     })()}

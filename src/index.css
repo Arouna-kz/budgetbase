@@ -142,3 +142,44 @@
     padding-top: 15px;
   }
 }
+
+
+/* Pour Modal de suppression personnel*/
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+
+/* Indicateurs de risque */
+.risk-indicator-low {
+  @apply bg-green-50 border-green-200 text-green-700;
+}
+
+.risk-indicator-medium {
+  @apply bg-yellow-50 border-yellow-200 text-yellow-700;
+}
+
+.risk-indicator-high {
+  @apply bg-red-50 border-red-200 text-red-700;
+}
+
+/* Animation de pulsation pour les alertes */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}

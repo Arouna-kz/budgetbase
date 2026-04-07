@@ -167,7 +167,7 @@ export interface Payment {
 
 export interface BankTransaction {
   id: string;
-  accountId: string;
+  grantId: string;
   date: string;
   description: string;
   amount: number;

@@ -73,6 +73,10 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   // HOOK DE NOTIFICATIONS POUR LES PAIEMENTS
   const { notificationCount, hasNotifications} = usePaymentNotifications(payments);
 
+  const getAvailableEngagementsCount = () => {
+    return filteredAvailableEngagements.length;
+  };
+
   // ÉTATS DU COMPOSANT
   const [showForm, setShowForm] = useState(false);
   const [showPaymentDetails, setShowPaymentDetails] = useState(false);

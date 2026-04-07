@@ -850,6 +850,7 @@ export const rolesService = {
   }
 };
 
+
 // Bank Accounts Service
 // export const bankAccountsService = {
 //   async getAll(): Promise<BankAccount[]> {
@@ -877,14 +878,32 @@ export const rolesService = {
 
 //   async create(account: Omit<BankAccount, 'id'>): Promise<BankAccount> {
 //     try {
+//       // Vérifier d'abord si le numéro de compte existe déjà
+//       const { data: existingAccount, error: checkError } = await supabase
+//         .from('bank_accounts')
+//         .select('account_number')
+//         .eq('account_number', account.accountNumber)
+//         .maybeSingle();
+
+//       if (checkError && checkError.code !== 'PGRST116') {
+//         // PGRST116 = no rows found, ce qui est normal
+//         throw checkError;
+//       }
+
+//       // Si un compte avec ce numéro existe déjà, lancer une erreur
+//       if (existingAccount) {
+//         throw new Error(`Un compte bancaire avec le numéro ${account.accountNumber} existe déjà`);
+//       }
+
+//       // Si aucun compte n'existe avec ce numéro, procéder à l'insertion
 //       const { data, error } = await supabase
 //         .from('bank_accounts')
 //         .insert({
 //           name: account.name,
 //           account_number: account.accountNumber,
 //           bank_name: account.bankName,
-//           balance: account.balance,
-//           last_update_date: account.lastUpdateDate
+//           balance: account.balance || 0,
+//           last_update_date: account.lastUpdateDate || new Date().toISOString()
 //         })
 //         .select()
 //         .single();
@@ -907,6 +926,24 @@ export const rolesService = {
 
 //   async update(id: string, updates: Partial<BankAccount>): Promise<void> {
 //     try {
+//       // Si on tente de mettre à jour le numéro de compte, vérifier qu'il n'existe pas déjà
+//       if (updates.accountNumber) {
+//         const { data: existingAccount, error: checkError } = await supabase
+//           .from('bank_accounts')
+//           .select('id, account_number')
+//           .eq('account_number', updates.accountNumber)
+//           .neq('id', id) // Exclure le compte actuel de la vérification
+//           .maybeSingle();
+
+//         if (checkError && checkError.code !== 'PGRST116') {
+//           throw checkError;
+//         }
+
+//         if (existingAccount) {
+//           throw new Error(`Un compte bancaire avec le numéro ${updates.accountNumber} existe déjà`);
+//         }
+//       }
+
 //       const { error } = await supabase
 //         .from('bank_accounts')
 //         .update({
@@ -936,159 +973,34 @@ export const rolesService = {
 //     } catch (error) {
 //       handleSupabaseError(error);
 //     }
+//   },
+
+//   async getByAccountNumber(accountNumber: string): Promise<BankAccount | null> {
+//     try {
+//       const { data, error } = await supabase
+//         .from('bank_accounts')
+//         .select('*')
+//         .eq('account_number', accountNumber)
+//         .maybeSingle();
+
+//       if (error) throw error;
+
+//       if (!data) return null;
+
+//       return {
+//         id: data.id,
+//         name: data.name,
+//         accountNumber: data.account_number,
+//         bankName: data.bank_name,
+//         balance: data.balance,
+//         lastUpdateDate: data.last_update_date
+//       };
+//     } catch (error) {
+//       handleSupabaseError(error);
+//       return null;
+//     }
 //   }
 // };
-
-// Bank Accounts Service
-export const bankAccountsService = {
-  async getAll(): Promise<BankAccount[]> {
-    try {
-      const { data, error } = await supabase
-        .from('bank_accounts')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-
-      return data.map(account => ({
-        id: account.id,
-        name: account.name,
-        accountNumber: account.account_number,
-        bankName: account.bank_name,
-        balance: account.balance,
-        lastUpdateDate: account.last_update_date
-      }));
-    } catch (error) {
-      handleSupabaseError(error);
-      return [];
-    }
-  },
-
-  async create(account: Omit<BankAccount, 'id'>): Promise<BankAccount> {
-    try {
-      // Vérifier d'abord si le numéro de compte existe déjà
-      const { data: existingAccount, error: checkError } = await supabase
-        .from('bank_accounts')
-        .select('account_number')
-        .eq('account_number', account.accountNumber)
-        .maybeSingle();
-
-      if (checkError && checkError.code !== 'PGRST116') {
-        // PGRST116 = no rows found, ce qui est normal
-        throw checkError;
-      }
-
-      // Si un compte avec ce numéro existe déjà, lancer une erreur
-      if (existingAccount) {
-        throw new Error(`Un compte bancaire avec le numéro ${account.accountNumber} existe déjà`);
-      }
-
-      // Si aucun compte n'existe avec ce numéro, procéder à l'insertion
-      const { data, error } = await supabase
-        .from('bank_accounts')
-        .insert({
-          name: account.name,
-          account_number: account.accountNumber,
-          bank_name: account.bankName,
-          balance: account.balance || 0,
-          last_update_date: account.lastUpdateDate || new Date().toISOString()
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      return {
-        id: data.id,
-        name: data.name,
-        accountNumber: data.account_number,
-        bankName: data.bank_name,
-        balance: data.balance,
-        lastUpdateDate: data.last_update_date
-      };
-    } catch (error) {
-      handleSupabaseError(error);
-      throw error;
-    }
-  },
-
-  async update(id: string, updates: Partial<BankAccount>): Promise<void> {
-    try {
-      // Si on tente de mettre à jour le numéro de compte, vérifier qu'il n'existe pas déjà
-      if (updates.accountNumber) {
-        const { data: existingAccount, error: checkError } = await supabase
-          .from('bank_accounts')
-          .select('id, account_number')
-          .eq('account_number', updates.accountNumber)
-          .neq('id', id) // Exclure le compte actuel de la vérification
-          .maybeSingle();
-
-        if (checkError && checkError.code !== 'PGRST116') {
-          throw checkError;
-        }
-
-        if (existingAccount) {
-          throw new Error(`Un compte bancaire avec le numéro ${updates.accountNumber} existe déjà`);
-        }
-      }
-
-      const { error } = await supabase
-        .from('bank_accounts')
-        .update({
-          ...(updates.name && { name: updates.name }),
-          ...(updates.accountNumber && { account_number: updates.accountNumber }),
-          ...(updates.bankName && { bank_name: updates.bankName }),
-          ...(updates.balance !== undefined && { balance: updates.balance }),
-          ...(updates.lastUpdateDate && { last_update_date: updates.lastUpdateDate }),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', id);
-
-      if (error) throw error;
-    } catch (error) {
-      handleSupabaseError(error);
-    }
-  },
-
-  async delete(id: string): Promise<void> {
-    try {
-      const { error } = await supabase
-        .from('bank_accounts')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-    } catch (error) {
-      handleSupabaseError(error);
-    }
-  },
-
-  async getByAccountNumber(accountNumber: string): Promise<BankAccount | null> {
-    try {
-      const { data, error } = await supabase
-        .from('bank_accounts')
-        .select('*')
-        .eq('account_number', accountNumber)
-        .maybeSingle();
-
-      if (error) throw error;
-
-      if (!data) return null;
-
-      return {
-        id: data.id,
-        name: data.name,
-        accountNumber: data.account_number,
-        bankName: data.bank_name,
-        balance: data.balance,
-        lastUpdateDate: data.last_update_date
-      };
-    } catch (error) {
-      handleSupabaseError(error);
-      return null;
-    }
-  }
-};
 
 // Bank Transactions Service
 export const bankTransactionsService = {
@@ -1103,7 +1015,7 @@ export const bankTransactionsService = {
 
       return data.map(transaction => ({
         id: transaction.id,
-        accountId: transaction.account_id,
+        grantId: transaction.grant_id,  // ← CHANGEMENT ICI : utiliser grant_id
         date: transaction.date,
         description: transaction.description,
         amount: transaction.amount,
@@ -1121,7 +1033,7 @@ export const bankTransactionsService = {
       const { data, error } = await supabase
         .from('bank_transactions')
         .insert({
-          account_id: transaction.accountId,
+          grant_id: transaction.grantId,  // ← CHANGEMENT ICI : utiliser grant_id
           date: transaction.date,
           description: transaction.description,
           amount: transaction.amount,
@@ -1135,7 +1047,7 @@ export const bankTransactionsService = {
 
       return {
         id: data.id,
-        accountId: data.account_id,
+        grantId: data.grant_id,  // ← CHANGEMENT ICI : utiliser grant_id
         date: data.date,
         description: data.description,
         amount: data.amount,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, CreditCard, User, CheckCircle, AlertTriangle, FileText, Truck, Download, ChevronUp, ChevronDown } from 'lucide-react';
 import { showValidationError, showSuccess, showWarning } from '../utils/alerts';
-import { BudgetLine, SubBudgetLine, Grant, Engagement, Payment, BankAccount } from '../types';
+import { BudgetLine, SubBudgetLine, Grant, Engagement, Payment } from '../types';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { useAuth } from '../hooks/useAuth';
@@ -12,7 +12,7 @@ interface PaymentFormProps {
   subBudgetLine: SubBudgetLine;
   budgetLine: BudgetLine;
   grant: Grant;
-  bankAccounts: BankAccount[];
+  // bankAccounts: BankAccount[];
   existingPayments: Payment[];
   onSave: (payment: Omit<Payment, 'id'>) => void;
   onSign: (paymentId: string, updates: Partial<Payment>) => void;
@@ -25,7 +25,7 @@ export default function PaymentForm({
   subBudgetLine,
   budgetLine,
   grant,
-  bankAccounts,
+  // bankAccounts,
   existingPayments,
   onSave,
   onSign,
@@ -179,6 +179,12 @@ export default function PaymentForm({
     // Enregistrer la signature immédiatement pour un paiement existant
     onSign(editingPayment.id, { approvals: newApprovalsState });
     showSuccess('Signature enregistrée !');
+    
+    // 🎯 NOUVEAU : Fermer automatiquement le popup après signature en mode édition
+    // Attendre 1 seconde pour que l'utilisateur voie le message de succès
+    setTimeout(() => {
+      onCancel(); // Fermer le popup
+    }, 1000);
   };
 
   // 🎯 FONCTION UNIFIÉE : Gère à la fois création et modification
@@ -271,6 +277,27 @@ export default function PaymentForm({
       return false;
     }
 
+    // Validation de la trésorerie
+    const availableBalance = grant.bankAccount?.balance || 0;
+    
+    // Calculer les paiements en attente d'encaissement
+    const pendingCashing = existingPayments.filter(p => 
+      p.status === 'paid' && 
+      (p.paymentMethod === 'check' || p.paymentMethod === 'transfer') && 
+      !p.cashedDate
+    ).reduce((sum, p) => sum + p.amount, 0);
+    
+    const effectiveBalance = availableBalance - pendingCashing;
+    
+    if (amount > effectiveBalance) {
+      showValidationError('Solde insuffisant', 
+        `Solde disponible: ${formatAmount(effectiveBalance)}\n` +
+        `Paiements en attente d'encaissement: ${formatAmount(pendingCashing)}\n` +
+        `Solde bancaire total: ${formatAmount(availableBalance)}`);
+      return false;
+    }
+
+
     return true;
   };
 
@@ -344,9 +371,13 @@ export default function PaymentForm({
   };
 
   // Calculs de trésorerie
-  const totalBankBalance = bankAccounts.reduce((sum, account) => sum + account.balance, 0);
-  const uncashedPayments = existingPayments.filter(p => p.status === 'paid' && !p.cashedDate);
-  const totalUncashedAmount = uncashedPayments.reduce((sum, p) => sum + p.amount, 0);
+  const totalBankBalance = grant.bankAccount?.balance || 0;
+  const totalUncashedPayments = existingPayments.filter(p => 
+    p.status === 'paid' && 
+    (p.paymentMethod === 'check' || p.paymentMethod === 'transfer') && 
+    !p.cashedDate
+  );
+  const totalUncashedAmount = totalUncashedPayments.reduce((sum, p) => sum + p.amount, 0);
   const availableBeforePayment = totalBankBalance - totalUncashedAmount;
   const balanceAfterPayment = availableBeforePayment - parseFloat(formData.amount || '0');
   
@@ -486,7 +517,13 @@ export default function PaymentForm({
           </h3>
           <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
             <div>
-              <strong>Solde total banques:</strong>
+              <strong>Compte bancaire:</strong>
+              <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
+                ${grant.bankAccount?.bankName || 'Non spécifié'} - ${grant.bankAccount?.accountNumber || 'N/A'}
+              </div>
+            </div>
+            <div>
+              <strong>Solde disponible:</strong>
               <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
                 ${formatAmount(totalBankBalance)}
               </div>
@@ -794,11 +831,11 @@ export default function PaymentForm({
               <h4 className="font-medium text-gray-800">Situation Bancaire</h4>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Solde total banques:</span>
-                  <span className="font-medium">{formatAmount(totalBankBalance)}</span>
+                  <span className="text-gray-600">Solde bancaire:</span>
+                  <span className="font-medium">{formatAmount(grant.bankAccount?.balance || 0)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Paiements non encaissés:</span>
+                  <span className="text-gray-600">Chèques/virements non encaissés:</span>
                   <span className="font-medium text-orange-600">-{formatAmount(totalUncashedAmount)}</span>
                 </div>
                 <div className="flex justify-between border-t pt-2">
@@ -1388,15 +1425,35 @@ export default function PaymentForm({
               onClick={onCancel}
               className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
             >
-              Annuler
+              Fermer
             </button>
+
             <button
+              type="submit"
+              disabled={editingPayment && currentUserProfession !== 'Comptable' || balanceAfterPayment < 0}
+              className={`flex-1 px-6 py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center space-x-2 ${
+                (editingPayment && currentUserProfession !== 'Comptable') || balanceAfterPayment < 0
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-green-600 to-blue-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
+              }`}
+            >
+              <Save className="w-5 h-5" />
+              <span>
+                {editingPayment ? (
+                  currentUserProfession === 'Comptable' 
+                    ? 'Modifier le Paiement' 
+                    : 'Modification réservée au comptable'
+                ) : 'Enregistrer le Paiement'}
+              </span>
+            </button>
+
+            {/* <button
               type="submit"
               className="flex-1 bg-gradient-to-r from-green-600 to-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center justify-center space-x-2"
             >
               <Save className="w-5 h-5" />
               <span>{editingPayment ? 'Modifier' : 'Enregistrer'} le Paiement</span>
-            </button>
+            </button> */}
           </div>
         </form>
       </div>
