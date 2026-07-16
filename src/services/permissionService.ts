@@ -35,17 +35,17 @@ export class PermissionService {
   // Liste des modules disponibles (définition statique)
   static getAvailableModules() {
     return [
-      { 
-        module: 'dashboard', 
-        label: 'Tableau de Bord', 
-        actions: ['view'],
-        description: 'Accès au tableau de bord principal'
+      {
+        module: 'dashboard',
+        label: 'Tableau de Bord',
+        actions: ['view', 'export'],
+        description: 'Accès au tableau de bord principal (export PDF de la page)'
       },
-      { 
-        module: 'grants', 
-        label: 'Subventions', 
-        actions: ['view', 'create', 'edit', 'delete'],
-        description: 'Gestion des subventions'
+      {
+        module: 'grants',
+        label: 'Subventions',
+        actions: ['view', 'create', 'edit', 'delete', 'export'],
+        description: 'Gestion des subventions (export PDF des fiches)'
       },
       { 
         module: 'budget_planning', 
@@ -59,17 +59,17 @@ export class PermissionService {
         actions: ['view', 'create', 'edit', 'delete', 'export'],
         description: 'Planification et suivi budgétaire'
       },
-      { 
-        module: 'engagements', 
-        label: 'Engagements', 
-        actions: ['view', 'create', 'edit', 'delete', 'sign'],
-        description: 'Gestion des engagements'
+      {
+        module: 'engagements',
+        label: 'Engagements',
+        actions: ['view', 'create', 'edit', 'delete', 'sign', 'export'],
+        description: 'Gestion des engagements (export PDF/Excel)'
       },
-      { 
-        module: 'payments', 
-        label: 'Paiements', 
-        actions: ['view', 'create', 'edit', 'delete', 'sign'],
-        description: 'Gestion des paiements'
+      {
+        module: 'payments',
+        label: 'Paiements',
+        actions: ['view', 'create', 'edit', 'delete', 'sign', 'export'],
+        description: 'Gestion des paiements (export PDF/Excel)'
       },
       { 
         module: 'treasury', 

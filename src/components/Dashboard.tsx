@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { TrendingUp, Target, AlertTriangle, CheckCircle, Clock, Eye, EyeOff, ChevronDown, ChevronUp, BarChart3, PieChart, DollarSign, Calendar, FileText, Plus, Minus } from 'lucide-react';
 import { Grant, BudgetLine, SubBudgetLine, Engagement, Payment, Prefinancing, EmployeeLoan, GRANT_STATUS } from '../types';
+import { usePermissions } from '../hooks/usePermissions';
 
 interface DashboardProps {
   grants: Grant[];
@@ -10,17 +11,21 @@ interface DashboardProps {
   payments: Payment[];
   prefinancings: Prefinancing[];
   employeeLoans: EmployeeLoan[];
+  onNavigate?: (tab: string) => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ 
-  grants, 
-  budgetLines, 
-  subBudgetLines, 
+export const Dashboard: React.FC<DashboardProps> = ({
+  grants,
+  budgetLines,
+  subBudgetLines,
   engagements,
   payments = [],
   prefinancings = [],
-  employeeLoans = []
+  employeeLoans = [],
+  onNavigate
 }) => {
+  const { hasPermission } = usePermissions();
+  const dashboardRef = useRef<HTMLDivElement>(null);
   const [showAllBudgetLines, setShowAllBudgetLines] = useState(false);
   const [showAllGrants, setShowAllGrants] = useState(false);
   const [showAllAlerts, setShowAllAlerts] = useState(false);
@@ -49,9 +54,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const getTotalDisbursed = (grantId: string) => {
     let totalDisbursed = 0;
 
-    // 1. Paiements décaissés (statut 'paid') 
-    const grantPayments = (payments || []).filter(p => p.grantId === grantId && p.status === 'paid');
-    const paymentsAmount = grantPayments.reduce((sum, payment) => sum + payment.amount, 0);
+    // 1. Paiements décaissés : cumule l'échelonné déjà payé (in_progress) + le direct complet (paid)
+    const grantPayments = (payments || []).filter(p =>
+      p.grantId === grantId && (p.status === 'paid' || p.status === 'in_progress')
+    );
+    const paymentsAmount = grantPayments.reduce((sum, payment) => {
+      // Paiement échelonné : additionner ce qui a déjà été payé (partiels)
+      if (payment.partialPayments && payment.partialPayments.length > 0) {
+        return sum + payment.partialPayments.reduce((s, pp) => s + pp.amount, 0);
+      }
+      // Paiement direct complet
+      if (payment.status === 'paid') {
+        return sum + payment.amount;
+      }
+      return sum;
+    }, 0);
     totalDisbursed += paymentsAmount;
 
     // 2. Préfinancements décaissés (statut 'paid' ou 'repaid')
@@ -108,9 +125,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const totalDisbursed = getTotalDisbursedForAllGrants();
   const totalAvailable = subBudgetLines.reduce((sum, line) => sum + (Number(line.availableAmount) || 0), 0);
 
-  // 🎯 INDICATEURS AVEC VALEURS RÉELLES
+  // 🎯 INDICATEURS — tous calculés sur le BUDGET NOTIFIÉ pour éviter les confusions
   const engagementRate = totalAllocated > 0 ? (totalEngaged / totalAllocated) * 100 : 0;
-  const executionRate = totalEngaged > 0 ? (totalDisbursed / totalEngaged) * 100 : 0;
+  // Taux d'exécution = décaissé ÷ budget notifié (et non ÷ engagé)
+  const executionRate = totalAllocated > 0 ? (totalDisbursed / totalAllocated) * 100 : 0;
   const allocationRate = totalGrantAmount > 0 ? (totalAllocated / totalGrantAmount) * 100 : 0;
 
   const pendingEngagements = engagements.filter(engagement => engagement.status === 'pending');
@@ -132,12 +150,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
       const grant = grants.find(g => g.id === budgetLine.grantId);
       if (!grant) return sum;
       
-      // Calculer le décaissement pour les paiements de cette sous-ligne
-      const subLinePayments = (payments || []).filter(p => 
-        p.subBudgetLineId === subLine.id && p.status === 'paid'
+      // Décaissement réel : échelonné déjà payé (in_progress) + direct complet (paid)
+      const subLinePayments = (payments || []).filter(p =>
+        p.subBudgetLineId === subLine.id && (p.status === 'paid' || p.status === 'in_progress')
       );
-      const paymentsAmount = subLinePayments.reduce((sum, payment) => sum + payment.amount, 0);
-      
+      const paymentsAmount = subLinePayments.reduce((s, payment) => {
+        if (payment.partialPayments && payment.partialPayments.length > 0) {
+          return s + payment.partialPayments.reduce((acc, pp) => acc + pp.amount, 0);
+        }
+        if (payment.status === 'paid') {
+          return s + payment.amount;
+        }
+        return s;
+      }, 0);
+
       return sum + paymentsAmount;
     }, 0);
 
@@ -223,9 +249,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   );
 
   return (
-    <div className="space-y-8 pb-8">
+    <div ref={dashboardRef} className="space-y-8 pb-8">
       {/* Header avec fond gradient et texte animé */}
-      <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-700 rounded-3xl p-6 md:p-8 text-white shadow-2xl mx-4 md:mx-0">
+      <div className="relative bg-gradient-to-r from-blue-600 via-purple-600 to-indigo-700 rounded-3xl p-6 md:p-8 text-white shadow-2xl mx-4 md:mx-0">
         <div className="text-center max-w-4xl mx-auto">
           <h1 className="text-2xl md:text-4xl font-bold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-white to-blue-100">
             Tableau de Bord Budgétaire
@@ -260,7 +286,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
       {/* Stats Cards avec design moderne */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-4 md:gap-6 px-4 md:px-0">
         {/* Carte Budget Total */}
-        <div className="bg-gradient-to-br from-white to-blue-50 rounded-2xl shadow-lg border border-blue-100 p-4 md:p-6 transform hover:scale-105 transition-all duration-300">
+        <div
+          onClick={() => onNavigate && onNavigate('grants')}
+          title="Somme des budgets notifiés des subventions actives — cliquez pour la page Subventions"
+          className={`bg-gradient-to-br from-white to-blue-50 rounded-2xl shadow-lg border border-blue-100 p-4 md:p-6 transition-all duration-300 ${onNavigate ? 'cursor-pointer hover:scale-105 hover:ring-2 hover:ring-blue-200' : ''}`}
+        >
           <div className="flex items-center justify-between">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-blue-600 uppercase tracking-wide truncate">Budget Total</p>
@@ -269,6 +299,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <Target className="w-4 h-4 text-blue-500 mr-1 flex-shrink-0" />
                 <p className="text-sm text-gray-600 truncate">{activeGrants.length} subventions actives</p>
               </div>
+              <p className="text-[11px] text-gray-400 mt-1">Budget notifié total des subventions.{onNavigate ? ' Cliquer pour voir →' : ''}</p>
             </div>
             <div className="p-2 md:p-3 bg-gradient-to-r from-blue-500 to-blue-600 rounded-2xl shadow-lg ml-3 flex-shrink-0">
               <DollarSign className="w-6 h-6 md:w-8 md:h-8 text-white" />
@@ -277,7 +308,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Carte Taux d'Engagement */}
-        <div className="bg-gradient-to-br from-white to-green-50 rounded-2xl shadow-lg border border-green-100 p-4 md:p-6 transform hover:scale-105 transition-all duration-300">
+        <div
+          onClick={() => onNavigate && onNavigate('engagements')}
+          title="= Montant engagé ÷ Budget notifié — cliquez pour la page Engagements"
+          className={`bg-gradient-to-br from-white to-green-50 rounded-2xl shadow-lg border border-green-100 p-4 md:p-6 transition-all duration-300 ${onNavigate ? 'cursor-pointer hover:scale-105 hover:ring-2 hover:ring-green-200' : ''}`}
+        >
           <div className="flex items-center justify-between">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-green-600 uppercase tracking-wide truncate">Taux d'Engagement</p>
@@ -288,6 +323,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   {formatAmount(totalEngaged)} engagés
                 </p>
               </div>
+              <p className="text-[11px] text-gray-400 mt-1">= Engagé ÷ Budget notifié.{onNavigate ? ' Cliquer pour voir →' : ''}</p>
             </div>
             <div className="p-2 md:p-3 bg-gradient-to-r from-green-500 to-green-600 rounded-2xl shadow-lg ml-3 flex-shrink-0">
               <BarChart3 className="w-6 h-6 md:w-8 md:h-8 text-white" />
@@ -296,7 +332,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Carte Taux d'Exécution (AVEC VALEURS RÉELLES) */}
-        <div className="bg-gradient-to-br from-white to-orange-50 rounded-2xl shadow-lg border border-orange-100 p-4 md:p-6 transform hover:scale-105 transition-all duration-300">
+        <div
+          onClick={() => onNavigate && onNavigate('tracking')}
+          title="= Montant décaissé ÷ Budget notifié — cliquez pour le Tableau de suivi budgétaire"
+          className={`bg-gradient-to-br from-white to-orange-50 rounded-2xl shadow-lg border border-orange-100 p-4 md:p-6 transition-all duration-300 ${onNavigate ? 'cursor-pointer hover:scale-105 hover:ring-2 hover:ring-orange-200' : ''}`}
+        >
           <div className="flex items-center justify-between">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-orange-600 uppercase tracking-wide truncate">Taux d'Exécution</p>
@@ -307,6 +347,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   {formatAmount(totalDisbursed)} décaissés
                 </p>
               </div>
+              <p className="text-[11px] text-gray-400 mt-1">= Décaissé ÷ Budget notifié.{onNavigate ? ' Cliquer pour voir →' : ''}</p>
             </div>
             <div className="p-2 md:p-3 bg-gradient-to-r from-orange-500 to-orange-600 rounded-2xl shadow-lg ml-3 flex-shrink-0">
               <PieChart className="w-6 h-6 md:w-8 md:h-8 text-white" />
@@ -315,7 +356,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Carte Montant Disponible */}
-        <div className="bg-gradient-to-br from-white to-purple-50 rounded-2xl shadow-lg border border-purple-100 p-4 md:p-6 transform hover:scale-105 transition-all duration-300">
+        <div
+          onClick={() => onNavigate && onNavigate('budget_planning')}
+          title="Budget encore disponible (non engagé) — cliquez pour la Planification"
+          className={`bg-gradient-to-br from-white to-purple-50 rounded-2xl shadow-lg border border-purple-100 p-4 md:p-6 transition-all duration-300 ${onNavigate ? 'cursor-pointer hover:scale-105 hover:ring-2 hover:ring-purple-200' : ''}`}
+        >
           <div className="flex items-center justify-between">
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-purple-600 uppercase tracking-wide truncate">Disponible</p>
@@ -326,6 +371,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   {pendingEngagements.length} en attente
                 </p>
               </div>
+              <p className="text-[11px] text-gray-400 mt-1">Budget non engagé restant.{onNavigate ? ' Cliquer pour voir →' : ''}</p>
             </div>
             <div className="p-2 md:p-3 bg-gradient-to-r from-purple-500 to-purple-600 rounded-2xl shadow-lg ml-3 flex-shrink-0">
               <Clock className="w-6 h-6 md:w-8 md:h-8 text-white" />
@@ -362,7 +408,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 const disbursedAmount = getTotalDisbursed(grant.id);
                 const grantBudgetLines = budgetLines.filter(line => line.grantId === grant.id);
                 const totalEngaged = grantBudgetLines.reduce((sum, line) => sum + line.engagedAmount, 0);
-                const executionRate = totalEngaged > 0 ? (disbursedAmount / totalEngaged) * 100 : 0;
+                const notifiedGrant = Number(grant.totalAmount) || 0;
+                // Décaissement effectué = décaissé ÷ budget notifié
+                const executionRate = notifiedGrant > 0 ? (disbursedAmount / notifiedGrant) * 100 : 0;
                 
                 return (
                   <div 
@@ -386,14 +434,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       <span className="break-words flex-1 mr-2">Début: {new Date(grant.startDate).toLocaleDateString('fr-FR')}</span>
                       <span className="break-words flex-1 text-right">Fin: {new Date(grant.endDate).toLocaleDateString('fr-FR')}</span>
                     </div>
-                    <div className="mt-2 p-2 bg-blue-50 rounded-lg">
+                    <div className="mt-2 p-2 bg-blue-50 rounded-lg" title="Part du budget notifié déjà décaissée (Décaissé ÷ Budget notifié)">
                       <div className="flex justify-between text-sm">
-                        <span className="text-blue-700 font-medium">Exécution réelle:</span>
+                        <span className="text-blue-700 font-medium">Décaissement effectué:</span>
                         <span className="text-blue-900 font-bold">{executionRate.toFixed(2)}%</span>
                       </div>
                       <div className="flex justify-between text-xs text-blue-600">
                         <span>Décaissé: {formatAmount(disbursedAmount, grant.currency)}</span>
-                        <span>Engagé: {formatAmount(totalEngaged, grant.currency)}</span>
+                        <span>Notifié: {formatAmount(notifiedGrant, grant.currency)}</span>
                       </div>
                     </div>
                   </div>
@@ -410,8 +458,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
 
-        {/* Répartition par Ligne Budgétaire - AMÉLIORÉE */}
-        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
+        {/* Répartition par Ligne Budgétaire - AMÉLIORÉE (exclue du PDF) */}
+        <div data-html2canvas-ignore="true" className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
           <div className="bg-gradient-to-r from-gray-50 to-white p-4 md:p-6 border-b border-gray-100 flex justify-between items-center">
             <h3 className="text-lg md:text-xl font-bold text-gray-900 flex items-center">
               <PieChart className="w-5 h-5 md:w-6 md:h-6 mr-2 md:mr-3 text-green-600" />
@@ -555,8 +603,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       </div>
 
-      {/* Troisième ligne : Alertes et Engagements Récents */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 md:gap-8 px-4 md:px-0">
+      {/* Troisième ligne : Alertes et Engagements Récents (exclue du PDF) */}
+      <div data-html2canvas-ignore="true" className="grid grid-cols-1 xl:grid-cols-2 gap-6 md:gap-8 px-4 md:px-0">
         {/* Alertes Budgétaires */}
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
           <div className="bg-gradient-to-r from-orange-50 to-white p-4 md:p-6 border-b border-orange-100 flex justify-between items-center">
@@ -707,7 +755,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       </div>
 
       {/* Styles CSS pour l'animation */}
-      <style jsx>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(-10px); }
           to { opacity: 1; transform: translateY(0); }
@@ -715,7 +763,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         .animate-fadeIn {
           animation: fadeIn 0.3s ease-out;
         }
-      `}</style>
+      `}} />
     </div>
   );
 };

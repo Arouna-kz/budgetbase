@@ -93,7 +93,7 @@ const LoginForm: React.FC = () => {
           <div className="flex items-center justify-center w-16 h-16 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl mx-auto mb-4">
             <Target className="w-8 h-8 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 mb-2">Budget BASE</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Budget Base</h1>
           <p className="text-gray-600">Connexion à votre espace de gestion</p>
         </div>
 

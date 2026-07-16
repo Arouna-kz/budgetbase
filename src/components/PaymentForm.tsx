@@ -259,6 +259,20 @@ export default function PaymentForm({
       return false;
     }
 
+    // Unicité du numéro de facture (éviter les doublons / confusions)
+    const normalizedInvoice = formData.invoiceNumber.trim().toLowerCase();
+    const duplicateInvoice = existingPayments.some(p =>
+      (p.invoiceNumber || '').trim().toLowerCase() === normalizedInvoice &&
+      (!editingPayment || p.id !== editingPayment.id)
+    );
+    if (duplicateInvoice) {
+      showValidationError(
+        'Numéro de facture en double',
+        `Le numéro de facture "${formData.invoiceNumber.trim()}" est déjà utilisé par un autre paiement. Veuillez saisir un numéro de facture unique.`
+      );
+      return false;
+    }
+
     // Validation du montant
     const amount = parseFloat(formData.amount);
     if (isNaN(amount) || amount <= 0) {
@@ -363,7 +377,8 @@ export default function PaymentForm({
       purchaseOrderNumber: formData.purchaseOrderNumber || undefined,
       serviceAcceptance: formData.serviceAcceptance,
       controlNotes: formData.controlNotes || undefined,
-      status: 'pending',
+      // ✅ Préserver le statut existant en modification ; "pending" seulement à la création
+      status: editingPayment ? editingPayment.status : 'pending',
       approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined
     };
 
@@ -380,7 +395,15 @@ export default function PaymentForm({
   const totalUncashedAmount = totalUncashedPayments.reduce((sum, p) => sum + p.amount, 0);
   const availableBeforePayment = totalBankBalance - totalUncashedAmount;
   const balanceAfterPayment = availableBeforePayment - parseFloat(formData.amount || '0');
-  
+
+  // Règle de modification :
+  // - Le comptable peut toujours modifier un paiement.
+  // - Les autres rôles disposant de la permission d'édition ne peuvent modifier
+  //   QUE tant que le paiement est "en attente" (pending).
+  const canModifyExisting =
+    currentUserProfession === 'Comptable' ||
+    (canEdit && editingPayment?.status === 'pending');
+
   // Calculs sur la ligne budgétaire
   const linePayments = existingPayments.filter(p => p.subBudgetLineId === subBudgetLine.id && p.status === 'paid');
   const totalPaidOnLine = linePayments.reduce((sum, p) => sum + p.amount, 0);
@@ -919,7 +942,7 @@ export default function PaymentForm({
                   value={formData.date}
                   onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
+                  required={!editingPayment}
                 />
               </div>
             </div>
@@ -1212,13 +1235,6 @@ export default function PaymentForm({
                     </div>
                   )}
                   
-                  {approvals.supervisor1.signature && (
-                    <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
-                      <p className="text-xs text-green-700">
-                        ✅ Prêt à être signé avec le paiement
-                      </p>
-                    </div>
-                  )}
                 </div>
 
                 {/* Comptable */}
@@ -1302,13 +1318,6 @@ export default function PaymentForm({
                     </div>
                   )}
                   
-                  {approvals.supervisor2.signature && (
-                    <div className="mt-2 p-2 bg-green-50 rounded border border-green-200">
-                      <p className="text-xs text-green-700">
-                        ✅ Prêt à être signé avec le paiement
-                      </p>
-                    </div>
-                  )}
                 </div>
 
                 {/* Coordonnateur National */}
@@ -1430,9 +1439,9 @@ export default function PaymentForm({
 
             <button
               type="submit"
-              disabled={editingPayment && currentUserProfession !== 'Comptable' || balanceAfterPayment < 0}
+              disabled={(editingPayment && !canModifyExisting) || balanceAfterPayment < 0}
               className={`flex-1 px-6 py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center space-x-2 ${
-                (editingPayment && currentUserProfession !== 'Comptable') || balanceAfterPayment < 0
+                (editingPayment && !canModifyExisting) || balanceAfterPayment < 0
                   ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-green-600 to-blue-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
               }`}
@@ -1440,8 +1449,8 @@ export default function PaymentForm({
               <Save className="w-5 h-5" />
               <span>
                 {editingPayment ? (
-                  currentUserProfession === 'Comptable' 
-                    ? 'Modifier le Paiement' 
+                  canModifyExisting
+                    ? 'Modifier le Paiement'
                     : 'Modification réservée au comptable'
                 ) : 'Enregistrer le Paiement'}
               </span>

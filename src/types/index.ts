@@ -129,7 +129,7 @@ export interface Payment {
   purchaseOrderNumber?: string;
   serviceAcceptance: boolean;
   controlNotes?: string;
-  status: 'pending' | 'approved' | 'paid' | 'cashed' | 'rejected';
+  status: 'pending' | 'approved' | 'in_progress' |'paid' | 'rejected';
   cashedDate?: string;
   approvals?: {
     supervisor1?: { 
@@ -151,6 +151,24 @@ export interface Payment {
       observation?: string 
     };
   };
+
+  // Nouveaux champs pour le suivi des paiements échelonnés
+  partialPayments?: PartialPayment[];
+  remainingAmount?: number;
+}
+
+
+// Nouvelle interface pour les paiements partiels
+export interface PartialPayment {
+  id: string;
+  amount: number;
+  date: string;
+  paymentMethod: 'transfer' | 'check' | 'cash';
+  checkNumber?: string;
+  bankReference?: string;
+  reference: string;
+  cashedDate?: string;
+  transactionId?: string; // Référence vers la transaction bancaire
 }
 
 
@@ -343,11 +361,11 @@ export const ENGAGEMENT_STATUS = {
 
 export const PAYMENT_STATUS = {
   pending: { label: 'En attente', color: 'bg-yellow-100 text-yellow-800' },
-  approved: { label: 'Approuvé', color: 'bg-green-100 text-green-800' },
-  paid: { label: 'Payé', color: 'bg-blue-100 text-blue-800' },
-  cashed: { label: 'Encaissé', color: 'bg-purple-100 text-purple-800' },
+  approved: { label: 'Approuvé', color: 'bg-blue-100 text-blue-800' },
+  in_progress: { label: 'En cours', color: 'bg-purple-100 text-purple-800' },
+  paid: { label: 'Payé', color: 'bg-green-100 text-green-800' },
   rejected: { label: 'Rejeté', color: 'bg-red-100 text-red-800' }
-};
+} as const;
 
 export const PREFINANCING_STATUS = {
   pending: { label: 'En attente', color: 'bg-yellow-100 text-yellow-800' },

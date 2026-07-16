@@ -1,11 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Edit, CreditCard, CheckCircle, Clock, AlertCircle, Eye, Filter, TrendingUp, User, X, ChevronUp, ChevronDown, ChevronRight, ChevronLeft, Search, Download } from 'lucide-react';
-import { showWarning, showSuccess, showValidationError } from '../utils/alerts';
-import { Payment, Engagement, BudgetLine, SubBudgetLine, Grant, BankAccount, PAYMENT_STATUS } from '../types';
+import { 
+  Plus, Edit, CreditCard, CheckCircle, Clock, AlertCircle, Eye, Filter, FileText,
+  TrendingUp, User, X, ChevronUp, ChevronDown, ChevronRight, ChevronLeft, 
+  Search, Download, DollarSign, AlertTriangle, Calendar, FileSpreadsheet,
+  ChevronsUpDown
+} from 'lucide-react';
+import { showWarning, showSuccess, showValidationError, showError } from '../utils/alerts';
+import { Payment, Engagement, BudgetLine, SubBudgetLine, Grant, BankAccount, PAYMENT_STATUS, PartialPayment } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../hooks/useAuth';
-import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import { exportStyledExcel } from '../utils/excelExport';
 import { usePaymentNotifications } from '../hooks/usePaymentNotifications';
 
 interface PaymentManagerProps {
@@ -21,35 +26,8 @@ interface PaymentManagerProps {
   onViewPaymentDetails: (paymentId: string) => void;
   onEditPayment: (paymentId: string) => void;
   onCreatePaymentFromEngagement: (engagementId: string) => void;
-}
-
-// Interface pour les signatures d'approbation des paiements
-interface PaymentApprovalSignature {
-  name: string;
-  signature: boolean;
-  date?: string;
-  observation?: string;
-}
-
-interface PaymentApprovals {
-  supervisor1?: { 
-    name: string; 
-    signature: boolean; 
-    observation: string;
-    date?: string;
-  };
-  supervisor2?: { 
-    name: string; 
-    signature: boolean; 
-    observation: string;
-    date?: string;
-  };
-  finalApproval?: { 
-    name: string; 
-    signature: boolean; 
-    observation: string;
-    date?: string;
-  };
+  onAddPartialPayment?: (paymentId: string, partialPayment: Omit<PartialPayment, 'id'>) => void;
+  onAddBankTransaction?: (transaction: any) => void;
 }
 
 const PaymentManager: React.FC<PaymentManagerProps> = ({
@@ -64,46 +42,46 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   onUpdatePayment,
   onViewPaymentDetails,
   onEditPayment,
-  onCreatePaymentFromEngagement
+  onCreatePaymentFromEngagement,
+  onAddPartialPayment,
+  onAddBankTransaction
 }) => {
   // HOOKS D'AUTHENTIFICATION ET PERMISSIONS
   const { hasPermission, hasModuleAccess, loading: permissionsLoading } = usePermissions();
   const { user: currentUser, userProfile, userRole } = useAuth();
 
-  // HOOK DE NOTIFICATIONS POUR LES PAIEMENTS
-  const { notificationCount, hasNotifications} = usePaymentNotifications(payments);
-
-  const getAvailableEngagementsCount = () => {
-    return filteredAvailableEngagements.length;
-  };
+  // HOOK DE NOTIFICATIONS
+  const { notificationCount, hasNotifications } = usePaymentNotifications(payments);
 
   // ÉTATS DU COMPOSANT
   const [showForm, setShowForm] = useState(false);
-  const [showPaymentDetails, setShowPaymentDetails] = useState(false);
-  const [selectedPayment, setSelectedPayment] = useState<Payment | null>(null);
+  const [showPartialPaymentForm, setShowPartialPaymentForm] = useState(false);
+  const [selectedPaymentForPartial, setSelectedPaymentForPartial] = useState<Payment | null>(null);
   const [editingPayment, setEditingPayment] = useState<Payment | null>(null);
   const [selectedEngagement, setSelectedEngagement] = useState<string>('');
+  const [expandAll, setExpandAll] = useState(false);
 
   // États pour le tri et la pagination
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
-  const [sortField, setSortField] = useState<string>('paymentNumber');
+  const [sortField, setSortField] = useState<string>('date');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [dateFilter, setDateFilter] = useState<string>('');
+  const [showOnlyToSign, setShowOnlyToSign] = useState(false);
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [supplierFilter, setSupplierFilter] = useState<string>('');
-
+  const [budgetLineFilter, setBudgetLineFilter] = useState<string>('');
+  const [subBudgetLineFilter, setSubBudgetLineFilter] = useState<string>('');
+  const [showDateRange, setShowDateRange] = useState<boolean>(false);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
-
-  // Références pour le PDF
-  const mainContentRef = useRef<HTMLDivElement>(null);
-  const signatureContentRef = useRef<HTMLDivElement>(null);
+  const [isGeneratingExcel, setIsGeneratingExcel] = useState(false);
 
   // État pour gérer l'expansion du contenu des cellules
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
-  // ÉTATS DU FORMULAIRE
+  // ÉTATS DU FORMULAIRE PRINCIPAL
   const [formData, setFormData] = useState({
     engagementId: '',
     grantId: '',
@@ -120,7 +98,17 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     status: 'pending' as Payment['status']
   });
 
-  const [approvals, setApprovals] = useState<PaymentApprovals>({
+  // ÉTATS DU FORMULAIRE DE PAIEMENT PARTIEL
+  const [partialPaymentData, setPartialPaymentData] = useState({
+    amount: '',
+    date: new Date().toISOString().split('T')[0],
+    paymentMethod: 'transfer' as 'transfer' | 'check' | 'cash',
+    checkNumber: '',
+    bankReference: '',
+    reference: ''
+  });
+
+  const [approvals, setApprovals] = useState<any>({
     supervisor1: { name: '', signature: false, observation: '' },
     supervisor2: { name: '', signature: false, observation: '' },
     finalApproval: { name: '', signature: false, observation: '' }
@@ -132,405 +120,12 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     finalApproval: false
   });
 
+  // RÉFÉRENCES POUR PDF
+  const mainContentRef = useRef<HTMLDivElement>(null);
+  const signatureContentRef = useRef<HTMLDivElement>(null);
 
-  // Optionnel : Ajouter une validation avant la génération
-  const handleExportPDF = () => {
-    // Vérifier si on a au moins les données minimales pour un brouillon
-    if (!editingPayment && (!formData.supplier || !formData.amount)) {
-      showWarning(
-        'Données manquantes', 
-        'Veuillez remplir au moins le fournisseur et le montant avant de générer le PDF'
-      );
-      return;
-    }
-    exportPaymentForm();
-  };
+  // 🎯 FONCTIONS UTILITAIRES
 
-  // 🎯 NOUVELLE FONCTION POUR EXPORTER LE FORMULAIRE DE PAIEMENT
-  const exportPaymentForm = async () => {
-    setIsGeneratingPDF(true);
-    
-    try {
-      // Déterminer les données à utiliser : édition ou création
-      const paymentData = editingPayment ? editingPayment : {
-        // Créer un objet paiement temporaire à partir des données du formulaire
-        id: 'temp',
-        engagementId: formData.engagementId,
-        grantId: formData.grantId,
-        budgetLineId: formData.budgetLineId,
-        subBudgetLineId: formData.subBudgetLineId,
-        paymentNumber: formData.paymentNumber || `BROUILLON-${Date.now()}`,
-        amount: parseFloat(formData.amount) || 0,
-        description: formData.description,
-        supplier: formData.supplier,
-        paymentMethod: formData.paymentMethod,
-        checkNumber: formData.checkNumber,
-        bankAccountId: formData.bankAccountId,
-        date: formData.date,
-        status: formData.status,
-        approvals: approvals
-      };
-
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 20;
-
-      // Générer le contenu principal
-      const mainContent = generateMainPDFContent(paymentData);
-      const tempMainDiv = document.createElement('div');
-      tempMainDiv.innerHTML = mainContent;
-      tempMainDiv.style.width = '800px';
-      tempMainDiv.style.padding = '20px';
-      tempMainDiv.style.fontFamily = 'Arial, sans-serif';
-      document.body.appendChild(tempMainDiv);
-
-      const mainCanvas = await html2canvas(tempMainDiv, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        width: 800,
-        windowWidth: 800
-      });
-      document.body.removeChild(tempMainDiv);
-
-      const mainImgData = mainCanvas.toDataURL('image/png');
-      const mainImgWidth = pageWidth - (margin * 2);
-      const mainImgHeight = (mainCanvas.height * mainImgWidth) / mainCanvas.width;
-
-      // Ajouter la première page avec le contenu principal
-      pdf.addImage(mainImgData, 'PNG', margin, margin, mainImgWidth, mainImgHeight);
-
-      // Générer le contenu des signatures (deuxième page)
-      const signatureContent = generateSignaturePDFContent(paymentData);
-      const tempSignatureDiv = document.createElement('div');
-      tempSignatureDiv.innerHTML = signatureContent;
-      tempSignatureDiv.style.width = '800px';
-      tempSignatureDiv.style.padding = '20px';
-      tempSignatureDiv.style.fontFamily = 'Arial, sans-serif';
-      document.body.appendChild(tempSignatureDiv);
-
-      const signatureCanvas = await html2canvas(tempSignatureDiv, {
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        width: 800,
-        windowWidth: 800
-      });
-      document.body.removeChild(tempSignatureDiv);
-
-      const signatureImgData = signatureCanvas.toDataURL('image/png');
-      const signatureImgWidth = pageWidth - (margin * 2);
-      const signatureImgHeight = (signatureCanvas.height * signatureImgWidth) / signatureCanvas.width;
-
-      // Ajouter une deuxième page pour les signatures
-      pdf.addPage();
-      pdf.addImage(signatureImgData, 'PNG', margin, margin, signatureImgWidth, signatureImgHeight);
-
-      // Télécharger le PDF avec un nom approprié
-      const fileName = editingPayment 
-        ? `paiement-${editingPayment.paymentNumber}.pdf`
-        : `brouillon-paiement-${new Date().toISOString().split('T')[0]}.pdf`;
-      
-      pdf.save(fileName);
-      
-      showSuccess('PDF généré', 'Le formulaire de paiement a été téléchargé avec succès');
-      
-    } catch (error) {
-      console.error('Erreur lors de la génération du PDF:', error);
-      showWarning('Erreur', 'Impossible de générer le PDF. Veuillez réessayer.');
-    } finally {
-      setIsGeneratingPDF(false);
-    }
-  };
-
-  // 🎯 FONCTION POUR GÉNÉRER LE CONTENU PRINCIPAL DU PDF
-  const generateMainPDFContent = (payment: any) => {
-    // Récupérer les données avec des valeurs par défaut
-    const engagement = payment.engagementId ? getEngagement(payment.engagementId) : null;
-    const budgetLine = payment.budgetLineId ? getBudgetLine(payment.budgetLineId) : null;
-    const subBudgetLine = payment.subBudgetLineId ? getSubBudgetLine(payment.subBudgetLineId) : null;
-    const grant = payment.grantId ? getGrant(payment.grantId) : activeGrant;
-    const bankAccount = payment.bankAccountId ? bankAccounts.find(acc => acc.id === payment.bankAccountId) : null;
-    const currencySymbol = getCurrencySymbol(grant?.currency || 'EUR');
-
-    const getPaymentMethodLabel = (method: Payment['paymentMethod']) => {
-      switch (method) {
-        case 'transfer': return 'Virement Bancaire';
-        case 'check': return 'Chèque';
-        case 'cash': return 'Espèces';
-        default: return method;
-      }
-    };
-
-    const getStatusLabel = (status: Payment['status']) => {
-      return PAYMENT_STATUS[status]?.label || status;
-    };
-
-    return `
-      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; color: #333;">
-        <!-- Header -->
-        <div style="text-align: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #2c5aa0;">
-          <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px; font-weight: bold;">
-            ${editingPayment ? 'FICHE DE PAIEMENT' : 'BROUILLON - FICHE DE PAIEMENT'}
-          </h1>
-          <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${payment.paymentNumber}</h2>
-          <p style="color: #777; font-size: 14px;">
-            Date: ${new Date(payment.date).toLocaleDateString('fr-FR', {
-              weekday: 'long',
-              year: 'numeric',
-              month: 'long',
-              day: 'numeric'
-            })}
-          </p>
-          ${!editingPayment && '<p style="color: #d97706; font-size: 12px; margin-top: 5px;">⚠️ Document non sauvegardé - Version brouillon</p>'}
-        </div>
-        
-        <!-- Informations de la Subvention -->
-        <div style="margin-bottom: 25px;">
-          <h3 style="color: #2c5aa0; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 16px; font-weight: bold;">
-            Informations de la Subvention
-          </h3>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <div>
-              <strong>Subvention:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${grant?.name || 'Non spécifié'}
-              </div>
-            </div>
-            <div>
-              <strong>Référence:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${grant?.reference || 'N/A'}
-              </div>
-            </div>
-            <div>
-              <strong>Organisation:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${grant?.grantingOrganization || 'N/A'}
-              </div>
-            </div>
-            <div>
-              <strong>Devise:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${grant?.currency || 'EUR'} (${currencySymbol})
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Informations de l'Engagement -->
-        ${engagement && `
-        <div style="margin-bottom: 25px;">
-          <h3 style="color: #2c5aa0; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 16px; font-weight: bold;">
-            Informations de l'Engagement
-          </h3>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-            <div>
-              <strong>N° d'Engagement:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${engagement.engagementNumber || 'N/A'}
-              </div>
-            </div>
-            <div>
-              <strong>Ligne Budgétaire:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${budgetLine?.code || 'N/A'} - ${budgetLine?.name || 'Non spécifié'}
-              </div>
-            </div>
-            <div>
-              <strong>Sous-Ligne Budgétaire:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${subBudgetLine?.code || 'N/A'} - ${subBudgetLine?.name || 'Non spécifié'}
-              </div>
-            </div>
-          </div>
-        </div>
-        `}
-        
-        <!-- Détails du Paiement -->
-        <div style="margin-bottom: 25px;">
-          <h3 style="color: #2c5aa0; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 16px; font-weight: bold;">
-            Détails du Paiement
-          </h3>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
-            <div>
-              <strong>N° de Paiement:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${payment.paymentNumber}
-              </div>
-            </div>
-            <div>
-              <strong>Date:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${new Date(payment.date).toLocaleDateString('fr-FR')}
-              </div>
-            </div>
-            <div>
-              <strong>Fournisseur:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${payment.supplier || 'Non spécifié'}
-              </div>
-            </div>
-            <div>
-              <strong>Statut:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px; font-weight: bold; color: ${
-                payment.status === 'paid' ? '#059669' : 
-                payment.status === 'approved' ? '#2563eb' : 
-                payment.status === 'pending' ? '#d97706' : '#dc2626'
-              };">
-                ${getStatusLabel(payment.status)}
-              </div>
-            </div>
-            <div>
-              <strong>Montant:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px; font-weight: bold; font-size: 16px;">
-                ${(payment.amount || 0).toLocaleString('fr-FR')} ${currencySymbol}
-              </div>
-            </div>
-            <div>
-              <strong>Mode de Paiement:</strong>
-              <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-                ${getPaymentMethodLabel(payment.paymentMethod)}
-              </div>
-            </div>
-          </div>
-          
-          ${payment.checkNumber ? `
-          <div style="margin-bottom: 10px;">
-            <strong>Numéro de Chèque:</strong>
-            <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-              ${payment.checkNumber}
-            </div>
-          </div>
-          ` : ''}
-          
-          ${bankAccount ? `
-          <div style="margin-bottom: 10px;">
-            <strong>Compte Bancaire:</strong>
-            <div style="padding: 8px; background: #f8f9fa; border-radius: 4px; margin-top: 5px;">
-              ${bankAccount.accountNumber} - ${bankAccount.bankName} (${bankAccount.accountHolder})
-            </div>
-          </div>
-          ` : ''}
-          
-          <div style="margin-bottom: 10px;">
-            <strong>Description:</strong>
-            <div style="padding: 12px; background: #f8f9fa; border-radius: 4px; margin-top: 5px; min-height: 60px;">
-              ${payment.description ? payment.description.replace(/\n/g, '<br>') : 'Aucune description'}
-            </div>
-          </div>
-        </div>
-        
-        <!-- Footer -->
-        <div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #2c5aa0; text-align: center; font-size: 12px; color: #777;">
-          <p>Document généré le ${new Date().toLocaleDateString('fr-FR', {
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit'
-          })}</p>
-          <p>${editingPayment ? `Fiche de paiement - ${payment.paymentNumber}` : 'Brouillon de fiche de paiement'}</p>
-        </div>
-      </div>
-    `;
-  };
-
-  // 🎯 FONCTION POUR GÉNÉRER LE CONTENU DES SIGNATURES DU PDF
-  const generateSignaturePDFContent = (payment: Payment) => {
-    const currentApprovals = payment.approvals || approvals;
-
-    return `
-      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; color: #333; padding-top: 50px;">
-        <div style="text-align: center; margin-bottom: 30px;">
-          <h1 style="color: #2c5aa0; margin-bottom: 10px; font-size: 24px; font-weight: bold;">SIGNATURES D'APPROBATION</h1>
-          <h2 style="color: #555; font-size: 18px; margin-bottom: 10px;">${payment.paymentNumber}</h2>
-        </div>
-        
-        <!-- Signatures -->
-        <div style="margin-bottom: 25px;">
-          <h3 style="color: #2c5aa0; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee; font-size: 16px; font-weight: bold;">
-            Signatures d'Approbation du Paiement
-          </h3>
-          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px;">
-            <!-- Coordinateur de la Subvention -->
-            <div style="border: 1px solid #ddd; border-radius: 8px; padding: 20px; text-align: center;">
-              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px; font-weight: bold;">Coordinateur de la Subvention</h4>
-              <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div style="min-height: 40px; margin-bottom: 10px; font-weight: bold;">
-                ${currentApprovals.supervisor1?.name || '_________________________'}
-              </div>
-              <p style="font-size: 12px; margin: 5px 0;">
-                <strong>Date:</strong> ${(currentApprovals.supervisor1 as any)?.date || '___/___/_____'}
-              </p>
-              <p style="font-size: 12px; margin: 5px 0;">
-                <strong>Signature:</strong> ${currentApprovals.supervisor1?.signature ? '✅ Validée' : '◻ Non validée'}
-              </p>
-              ${currentApprovals.supervisor1?.observation ? `
-              <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
-                <strong style="font-size: 11px;">Observation:</strong>
-                <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">${currentApprovals.supervisor1.observation}</p>
-              </div>
-              ` : ''}
-            </div>
-            
-            <!-- Comptable -->
-            <div style="border: 1px solid #ddd; border-radius: 8px; padding: 20px; text-align: center;">
-              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px; font-weight: bold;">Comptable</h4>
-              <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div style="min-height: 40px; margin-bottom: 10px; font-weight: bold;">
-                ${currentApprovals.supervisor2?.name || '_________________________'}
-              </div>
-              <p style="font-size: 12px; margin: 5px 0;">
-                <strong>Date:</strong> ${(currentApprovals.supervisor2 as any)?.date || '___/___/_____'}
-              </p>
-              <p style="font-size: 12px; margin: 5px 0;">
-                <strong>Signature:</strong> ${currentApprovals.supervisor2?.signature ? '✅ Validée' : '◻ Non validée'}
-              </p>
-              ${currentApprovals.supervisor2?.observation ? `
-              <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
-                <strong style="font-size: 11px;">Observation:</strong>
-                <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">${currentApprovals.supervisor2.observation}</p>
-              </div>
-              ` : ''}
-            </div>
-            
-            <!-- Coordonnateur National -->
-            <div style="border: 1px solid #ddd; border-radius: 8px; padding: 20px; text-align: center;">
-              <h4 style="font-size: 14px; color: #555; margin-bottom: 15px; font-weight: bold;">Coordonnateur National</h4>
-              <div style="height: 1px; background: #ccc; margin: 20px 0;"></div>
-              <div style="min-height: 40px; margin-bottom: 10px; font-weight: bold;">
-                ${currentApprovals.finalApproval?.name || '_________________________'}
-              </div>
-              <p style="font-size: 12px; margin: 5px 0;">
-                <strong>Date:</strong> ${(currentApprovals.finalApproval as any)?.date || '___/___/_____'}
-              </p>
-              <p style="font-size: 12px; margin: 5px 0;">
-                <strong>Signature:</strong> ${currentApprovals.finalApproval?.signature ? '✅ Validée' : '◻ Non validée'}
-              </p>
-              ${currentApprovals.finalApproval?.observation ? `
-              <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px;">
-                <strong style="font-size: 11px;">Observation:</strong>
-                <p style="font-size: 11px; color: #666; margin: 5px 0 0 0;">${currentApprovals.finalApproval.observation}</p>
-              </div>
-              ` : ''}
-            </div>
-          </div>
-        </div>
-        
-        <!-- Footer -->
-        <div style="margin-top: 50px; padding-top: 20px; border-top: 2px solid #2c5aa0; text-align: center; font-size: 12px; color: #777;">
-          <p>Page 2/2 - Signatures d'approbation</p>
-          <p>Fiche de paiement - ${payment.paymentNumber}</p>
-        </div>
-      </div>
-    `;
-  };
-
-  // 🎯 FONCTIONS UTILITAIRES POUR LES RÔLES ET PERMISSIONS
-
-  // Récupère le nom complet de l'utilisateur
   const getUserFullName = (): string => {
     if (!userProfile) return '';
     if (userProfile.firstName && userProfile.lastName) {
@@ -539,19 +134,15 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     return userProfile?.email || '';
   };
 
-  // Récupère la profession de l'utilisateur
   const getUserProfession = (): string => {
     return userProfile?.profession || '';
   };
 
-  // Vérifie si l'utilisateur peut voir la section signature
   const canViewSignatureSection = (): boolean => {
     const signatureProfessions = ['Coordinateur de la Subvention', 'Comptable', 'Coordonnateur National'];
     return signatureProfessions.includes(getUserProfession());
   };
-  
 
-  // Vérifie si l'utilisateur peut modifier le statut
   const canModifyStatusComptable = (): boolean => {
     return getUserProfession() === 'Comptable';
   };
@@ -560,7 +151,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     return getUserProfession() === 'Coordonnateur National';
   };
 
-  // Vérifie si l'utilisateur peut signer un paiement spécifique
   const canSignPayment = (payment: Payment | null, signatureType: string): boolean => {
     const currentApprovals = payment ? payment.approvals : approvals;
     
@@ -570,7 +160,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     
     const userProfession = getUserProfession();
     
-    // Vérification basée sur la profession et le type de signature
     const professionCanSign = 
       (signatureType === 'supervisor1' && userProfession === 'Coordinateur de la Subvention') ||
       (signatureType === 'supervisor2' && userProfession === 'Comptable') ||
@@ -578,16 +167,14 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
 
     if (!professionCanSign) return false;
 
-    // Vérifie que la signature n'est pas déjà apposée
     const existingApproval = currentApprovals[signatureType as keyof typeof currentApprovals];
     if (existingApproval?.signature) return false;
 
-    // Pour le coordonnateur national, vérifier que les deux premiers ont signé
     if (signatureType === 'finalApproval') {
       const hasSupervisor1Signed = currentApprovals.supervisor1?.signature;
       const hasSupervisor2Signed = currentApprovals.supervisor2?.signature;
       
-      if (!payment) return false; // Le CN ne peut signer que les paiements existants
+      if (!payment) return false;
       
       if (!hasSupervisor1Signed || !hasSupervisor2Signed) {
         return false;
@@ -597,26 +184,41 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     return true;
   };
 
-  // Récupère les paiements en attente de signature pour l'utilisateur actuel
-  const getPendingSignatures = (): Payment[] => {
-    const userProfession = getUserProfession();
-    
-    return payments.filter(payment => {
-      if (userProfession === 'Coordinateur de la Subvention') {
-        return !payment.approvals?.supervisor1?.signature;
-      } else if (userProfession === 'Comptable') {
-        return !payment.approvals?.supervisor2?.signature;
-      } else if (userProfession === 'Coordonnateur National') {
-        const hasSupervisor1Signed = payment.approvals?.supervisor1?.signature;
-        const hasSupervisor2Signed = payment.approvals?.supervisor2?.signature;
-        const hasFinalSigned = payment.approvals?.finalApproval?.signature;
-        return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
-      }
-      return false;
-    });
+
+  // L'icône Edit s'affiche pour TOUS ceux qui ont la permission de modifier,
+  // quel que soit le statut du paiement (en attente, approuvé, rejeté...).
+  // La restriction réelle est gérée dans le formulaire : le bouton d'enregistrement
+  // n'est actif, pour un paiement qui n'est plus "en attente", que pour le comptable.
+  const canEditPayment = (_payment: Payment): boolean => {
+    return canEdit;
   };
 
-  // Fonction pour basculer l'expansion d'une ligne
+
+  // Le paiement nécessite-t-il la signature de l'utilisateur courant ?
+  const needsUserSignature = (payment: Payment): boolean => {
+    const userProfession = getUserProfession();
+    if (userProfession === 'Coordinateur de la Subvention') {
+      return !payment.approvals?.supervisor1?.signature;
+    } else if (userProfession === 'Comptable') {
+      return !payment.approvals?.supervisor2?.signature;
+    } else if (userProfession === 'Coordonnateur National') {
+      const hasSupervisor1Signed = payment.approvals?.supervisor1?.signature;
+      const hasSupervisor2Signed = payment.approvals?.supervisor2?.signature;
+      const hasFinalSigned = payment.approvals?.finalApproval?.signature;
+      // Le coordonnateur (signataire final) doit signer ET décider (approuver/rejeter).
+      // L'élément reste dans la liste "À signer" tant qu'il n'a pas fait les DEUX :
+      // il n'en disparaît qu'une fois signé ET son statut décidé (≠ 'pending'),
+      // pour lui éviter d'avoir à rechercher l'élément plus tard pour changer le statut.
+      const hasDecision = payment.status !== 'pending';
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !(hasFinalSigned && hasDecision));
+    }
+    return false;
+  };
+
+  const getPendingSignatures = (): Payment[] => {
+    return payments.filter(payment => needsUserSignature(payment));
+  };
+
   const toggleRowExpansion = (paymentId: string) => {
     setExpandedRows(prev => {
       const newSet = new Set(prev);
@@ -629,53 +231,34 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     });
   };
 
-  // Fonction pour tronquer le texte
+  const toggleAllRows = () => {
+    if (expandAll) {
+      setExpandedRows(new Set());
+    } else {
+      const allIds = new Set(currentPayments.map(p => p.id));
+      setExpandedRows(allIds);
+    }
+    setExpandAll(!expandAll);
+  };
+
   const truncateText = (text: string, maxLength: number = 30): string => {
     if (!text) return '';
     return text.length > maxLength ? `${text.substring(0, maxLength)}...` : text;
   };
 
-  // EFFET POUR PRÉ-REMPLIR LES NOMS DES SIGNATAIRES
-  React.useEffect(() => {
-    if (userProfile && canViewSignatureSection()) {
-      const userName = getUserFullName();
-      
-      setApprovals(prev => {
-        const newApprovals = { ...prev };
-        const userProfession = getUserProfession();
-        
-        if (userProfession === 'Coordinateur de la Subvention') {
-          newApprovals.supervisor1 = { 
-            ...newApprovals.supervisor1, 
-            name: userName 
-          };
-        } else if (userProfession === 'Comptable') {
-          newApprovals.supervisor2 = { 
-            ...newApprovals.supervisor2, 
-            name: userName 
-          };
-        } else if (userProfession === 'Coordonnateur National') {
-          newApprovals.finalApproval = { 
-            ...newApprovals.finalApproval, 
-            name: userName 
-          };
-        }
-        
-        return newApprovals;
-      });
-    }
-  }, [userProfile]);
-
-  // PERMISSIONS SPÉCIFIQUES AU MODULE PAIEMENTS
+  // PERMISSIONS
   const canCreate = hasPermission('payments', 'create');
   const canEdit = hasPermission('payments', 'edit');
   const canDelete = hasPermission('payments', 'delete');
   const canView = hasPermission('payments', 'view');
+  const canExport = hasPermission('payments', 'export');
 
-  // Récupération des données utilisateur
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();
   const pendingSignatures = getPendingSignatures();
+  // ✅ Un paiement reste "à signer" tant que l'utilisateur ne l'a pas signé, quel que soit le statut.
+  // (Approuver/rejeter sans signer ne doit PAS retirer l'élément de la liste.)
+  const toSignCount = payments.filter(p => needsUserSignature(p)).length;
 
   // Filtrer les engagements approuvés qui n'ont pas encore de paiement
   const availableEngagements = engagements.filter(engagement => 
@@ -683,25 +266,21 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     !payments.some(payment => payment.engagementId === engagement.id)
   );
 
-  // Filtrer les paiements par subvention sélectionnée
+  // Filtrer les paiements par subvention
   const filteredPayments = selectedGrantId 
     ? payments.filter(payment => payment.grantId === selectedGrantId)
     : payments;
 
-  // Filtrer les engagements disponibles par subvention sélectionnée
   const filteredAvailableEngagements = selectedGrantId
     ? availableEngagements.filter(engagement => engagement.grantId === selectedGrantId)
     : availableEngagements;
 
-  // Trouver la subvention active
   const activeGrant = grants.find(grant => grant.id === selectedGrantId) || 
                      grants.find(grant => grant.status === 'active') || 
                      grants[0] || 
                      null;
 
-  // 🎯 FONCTIONS DE RECHERCHE ET FILTRAGE AMÉLIORÉES
-
-  // Fonction pour obtenir les données liées
+  // Fonctions utilitaires
   const getEngagement = (engagementId: string) => {
     return engagements.find(eng => eng.id === engagementId);
   };
@@ -714,35 +293,100 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     return subBudgetLines.find(line => line.id === subBudgetLineId);
   };
 
-
   const getGrant = (grantId: string) => {
     return grants.find(grant => grant.id === grantId);
   };
 
-  // Filtrage et recherche des paiements
+  // Calculer le montant total payé pour un paiement
+  const getTotalPaid = (payment: Payment): number => {
+    if (!payment.partialPayments || payment.partialPayments.length === 0) {
+      return 0;
+    }
+    return payment.partialPayments.reduce((sum, pp) => sum + pp.amount, 0);
+  };
+
+  // Calculer le montant restant
+  const getRemainingAmount = (payment: Payment): number => {
+    const totalPaid = getTotalPaid(payment);
+    return payment.amount - totalPaid;
+  };
+
+  // Obtenir la progression du paiement
+  const getPaymentProgress = (payment: Payment): number => {
+    if (payment.amount === 0) return 0;
+    const totalPaid = getTotalPaid(payment);
+    return Math.min((totalPaid / payment.amount) * 100, 100);
+  };
+
+  // Vérifier si un paiement est complètement payé
+  const isFullyPaid = (payment: Payment): boolean => {
+    return getRemainingAmount(payment) <= 0;
+  };
+
+  // Vérifier si un paiement a des paiements partiels
+  const hasPartialPayments = (payment: Payment): boolean => {
+    return payment.partialPayments && payment.partialPayments.length > 0;
+  };
+
+  // Mettre à jour automatiquement le statut
+  const updatePaymentStatusAutomatically = (payment: Payment): Payment['status'] => {
+    const remaining = getRemainingAmount(payment);
+    const hasPartials = hasPartialPayments(payment);
+    
+    if (remaining <= 0) {
+      return 'paid';
+    } else if (hasPartials && remaining > 0) {
+      return 'in_progress';
+    }
+    return payment.status;
+  };
+
+  // Filtrage et recherche avec plage de dates
   const searchedPayments = filteredPayments.filter(payment => {
     const searchLower = searchTerm.toLowerCase();
     const engagement = getEngagement(payment.engagementId);
+    const budgetLine = getBudgetLine(payment.budgetLineId);
+    const subBudgetLine = getSubBudgetLine(payment.subBudgetLineId);
+    
+    const budgetLineSearchText = budgetLine ? `${budgetLine.code} ${budgetLine.name}` : '';
+    const subBudgetLineSearchText = subBudgetLine ? `${subBudgetLine.code} ${subBudgetLine.name}` : '';
+    const engagementSearchText = engagement ? `${engagement.engagementNumber} ${engagement.description}` : '';
     
     const matchesSearch = 
       payment.paymentNumber.toLowerCase().includes(searchLower) ||
       payment.description.toLowerCase().includes(searchLower) ||
       (payment.supplier && payment.supplier.toLowerCase().includes(searchLower)) ||
-      (engagement && engagement.engagementNumber.toLowerCase().includes(searchLower)) ||
+      engagementSearchText.toLowerCase().includes(searchLower) ||
       payment.checkNumber?.toLowerCase().includes(searchLower) ||
       payment.bankReference?.toLowerCase().includes(searchLower) ||
-      payment.invoiceNumber?.toLowerCase().includes(searchLower) ||
-      payment.quoteReference?.toLowerCase().includes(searchLower);
+      budgetLineSearchText.toLowerCase().includes(searchLower) ||
+      subBudgetLineSearchText.toLowerCase().includes(searchLower);
 
     const matchesStatus = statusFilter === 'all' || payment.status === statusFilter;
-    const matchesDate = !dateFilter || payment.date === dateFilter;
+
+    // ✅ Filtre "À signer" : uniquement les paiements en attente nécessitant ma signature
+    // L'élément reste dans la liste "À signer" tant que ma signature est requise, quel que soit le statut.
+    const matchesToSign = !showOnlyToSign || needsUserSignature(payment);
+
+    const matchesDateRange = !showDateRange ? true : (
+      (!startDate || payment.date >= startDate) &&
+      (!endDate || payment.date <= endDate)
+    );
+    
     const matchesSupplier = !supplierFilter || 
       (payment.supplier && payment.supplier.toLowerCase().includes(supplierFilter.toLowerCase()));
 
-    return matchesSearch && matchesStatus && matchesDate && matchesSupplier;
+    const matchesBudgetLine = !budgetLineFilter || 
+      payment.budgetLineId === budgetLineFilter;
+
+    const matchesSubBudgetLine = !subBudgetLineFilter || 
+      payment.subBudgetLineId === subBudgetLineFilter;
+
+    return matchesSearch && matchesStatus && matchesToSign && matchesDateRange &&
+           matchesSupplier && matchesBudgetLine && matchesSubBudgetLine;
   });
 
-  // Tri des paiements
+  // Tri
   const sortedPayments = [...searchedPayments].sort((a, b) => {
     let aValue: any = a[sortField as keyof Payment];
     let bValue: any = b[sortField as keyof Payment];
@@ -753,6 +397,28 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     } else if (sortField === 'date') {
       aValue = new Date(aValue).getTime();
       bValue = new Date(bValue).getTime();
+    } else if (sortField === 'engagementNumber') {
+      const engagementA = getEngagement(a.engagementId);
+      const engagementB = getEngagement(b.engagementId);
+      aValue = engagementA?.engagementNumber || '';
+      bValue = engagementB?.engagementNumber || '';
+    } else if (sortField === 'supplier') {
+      aValue = a.supplier || '';
+      bValue = b.supplier || '';
+    } else if (sortField === 'budgetLine') {
+      const budgetLineA = getBudgetLine(a.budgetLineId);
+      const budgetLineB = getBudgetLine(b.budgetLineId);
+      aValue = budgetLineA?.name || '';
+      bValue = budgetLineB?.name || '';
+    } else if (sortField === 'subBudgetLine') {
+      const subBudgetLineA = getSubBudgetLine(a.subBudgetLineId);
+      const subBudgetLineB = getSubBudgetLine(b.subBudgetLineId);
+      aValue = subBudgetLineA?.name || '';
+      bValue = subBudgetLineB?.name || '';
+    }
+
+    if (typeof aValue === 'string') {
+      return sortDirection === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
     }
 
     if (aValue < bValue) return sortDirection === 'asc' ? -1 : 1;
@@ -766,12 +432,10 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   const endIndex = startIndex + itemsPerPage;
   const currentPayments = sortedPayments.slice(startIndex, endIndex);
 
-  // Navigation des pages
   const goToPage = (page: number) => setCurrentPage(page);
   const goToPreviousPage = () => currentPage > 1 && setCurrentPage(currentPage - 1);
   const goToNextPage = () => currentPage < totalPages && setCurrentPage(currentPage + 1);
 
-  // Gestion du tri
   const handleSort = (field: string) => {
     if (sortField === field) {
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
@@ -779,53 +443,138 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
       setSortField(field);
       setSortDirection('asc');
     }
+    setCurrentPage(1);
   };
 
   const getSortIcon = (field: string) => {
     if (sortField !== field) return null;
     return sortDirection === 'asc' ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />;
   };
-   
 
   // 🚨 GESTIONNAIRES D'ÉVÉNEMENTS
 
-  // Fonction pour signer un paiement
   const handleSignPayment = (payment: Payment, signatureType: string) => {
-      if (!canSignPayment(payment, signatureType)) {
-          if (signatureType === 'finalApproval') {
-              showWarning('Signature impossible', 'Les signatures du Coordinateur de la Subvention et du Comptable sont requises avant la vôtre.');
-          } else {
-              showWarning('Permission refusée', 'Vous n\'avez pas les droits pour apposer cette signature.');
-          }
-          return;
-      }
-
-      // Préparer les données de la nouvelle signature
-      const signatureData = {
-          name: getUserFullName(),
-          date: new Date().toISOString().split('T')[0],
-          signature: true,
-          observation: '', // L'observation doit être ajoutée via le formulaire de modification complet
-      };
-
-      // Créer l'objet de mise à jour partiel
-      const updates: Partial<Payment> = {
-          approvals: {
-              ...payment.approvals,
-              [signatureType]: signatureData,
-          }
-      };
-
-      // Mettre à jour le statut si le Coordonnateur National signe
+    if (!canSignPayment(payment, signatureType)) {
       if (signatureType === 'finalApproval') {
-          updates.status = 'approved';
+        showWarning('Signature impossible', 'Les signatures du Coordinateur de la Subvention et du Comptable sont requises avant la vôtre.');
+      } else {
+        showWarning('Permission refusée', 'Vous n\'avez pas les droits pour apposer cette signature.');
       }
+      return;
+    }
 
-      onUpdatePayment(payment.id, updates);
-      showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès.');
+    const signatureData = {
+      name: getUserFullName(),
+      date: new Date().toISOString().split('T')[0],
+      signature: true,
+      observation: '',
+    };
+
+    const updates: Partial<Payment> = {
+      approvals: {
+        ...payment.approvals,
+        [signatureType]: signatureData,
+      }
+    };
+
+    if (signatureType === 'finalApproval') {
+      updates.status = 'approved';
+    }
+
+    onUpdatePayment(payment.id, updates);
+    showSuccess('Signature enregistrée', 'Votre signature a été enregistrée avec succès.');
   };
 
-  // Réinitialisation du formulaire - CORRIGÉE
+  // Fonction pour ajouter un paiement partiel
+  const handleAddPartialPayment = (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!selectedPaymentForPartial) {
+      showError('Erreur', 'Aucun paiement sélectionné');
+      return;
+    }
+
+    const amount = parseFloat(partialPaymentData.amount);
+    if (isNaN(amount) || amount <= 0) {
+      showValidationError('Montant invalide', 'Veuillez saisir un montant valide supérieur à 0');
+      return;
+    }
+
+    const remaining = getRemainingAmount(selectedPaymentForPartial);
+    if (amount > remaining) {
+      showValidationError('Montant trop élevé', `Le montant saisi (${formatCurrency(amount)}) dépasse le montant restant (${formatCurrency(remaining)})`);
+      return;
+    }
+
+    if (!partialPaymentData.reference.trim()) {
+      showValidationError('Référence manquante', 'Veuillez saisir une référence pour ce paiement partiel');
+      return;
+    }
+
+    // Créer le paiement partiel
+    const partialPayment: Omit<PartialPayment, 'id'> = {
+      amount: amount,
+      date: partialPaymentData.date,
+      paymentMethod: partialPaymentData.paymentMethod,
+      checkNumber: partialPaymentData.checkNumber || undefined,
+      bankReference: partialPaymentData.bankReference || undefined,
+      reference: partialPaymentData.reference
+    };
+
+    // Ajouter le paiement partiel
+    if (onAddPartialPayment) {
+      onAddPartialPayment(selectedPaymentForPartial.id, partialPayment);
+    }
+
+    // Créer une transaction bancaire automatiquement
+    if (onAddBankTransaction) {
+      const grant = getGrant(selectedPaymentForPartial.grantId);
+      const transaction = {
+        grantId: selectedPaymentForPartial.grantId,
+        date: partialPaymentData.date,
+        description: `Paiement partiel - ${selectedPaymentForPartial.paymentNumber} - ${selectedPaymentForPartial.supplier}`,
+        amount: amount,
+        type: 'debit' as 'debit',
+        reference: partialPaymentData.reference,
+        paymentId: selectedPaymentForPartial.id
+      };
+      onAddBankTransaction(transaction);
+    }
+
+    // Calculer le nouveau statut automatiquement
+    const newTotalPaid = getTotalPaid(selectedPaymentForPartial) + amount;
+    const newRemaining = selectedPaymentForPartial.amount - newTotalPaid;
+    let newStatus: Payment['status'];
+    
+    if (newRemaining <= 0) {
+      newStatus = 'paid';
+    } else if (newTotalPaid > 0) {
+      newStatus = 'in_progress';
+    } else {
+      newStatus = selectedPaymentForPartial.status;
+    }
+
+    // Mettre à jour le statut automatiquement
+    onUpdatePayment(selectedPaymentForPartial.id, {
+      status: newStatus,
+      remainingAmount: newRemaining
+    });
+
+    showSuccess('Paiement partiel ajouté', `Le paiement partiel de ${formatCurrency(amount)} a été enregistré avec succès`);
+    
+    // Réinitialiser le formulaire
+    setPartialPaymentData({
+      amount: '',
+      date: new Date().toISOString().split('T')[0],
+      paymentMethod: 'transfer',
+      checkNumber: '',
+      bankReference: '',
+      reference: ''
+    });
+    setShowPartialPaymentForm(false);
+    setSelectedPaymentForPartial(null);
+  };
+
   const resetForm = () => {
     setFormData({
       engagementId: '',
@@ -842,7 +591,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
       date: new Date().toISOString().split('T')[0],
       status: 'pending'
     });
-    // Réinitialiser avec la structure correcte
     setApprovals({
       supervisor1: { name: '', signature: false, observation: '' },
       supervisor2: { name: '', signature: false, observation: '' },
@@ -857,17 +605,15 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     setEditingPayment(null);
   };
 
-
   const getCurrencySymbol = (currency: Grant['currency']) => {
     switch (currency) {
       case 'EUR': return '€';
       case 'USD': return '$';
-      case 'XOF': return 'CFA';
+      case 'XOF': return 'FCFA';
       default: return '€';
     }
   };
 
-  // Fonction pour formater les montants avec la devise de la subvention active
   const formatCurrency = (amount: number) => {
     if (!activeGrant) return amount.toLocaleString('fr-FR');
     
@@ -878,15 +624,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     });
   };
 
-  const updatePaymentStatus = (paymentId: string, newStatus: Payment['status']) => {
-    if (!canModifyStatus() && !canModifyStatusComptable()) {
-      showWarning('Permission refusée', 'Seul le Coordonnateur National ou Comptable peuvent modifier le statut des paiements');
-      return;
-    }
-    onUpdatePayment(paymentId, { status: newStatus });
-  };
-
-  // Fonction pour basculer l'affichage des observations
   const toggleObservation = (signatureType: string) => {
     setShowObservations(prev => ({
       ...prev,
@@ -894,7 +631,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     }));
   };
 
-  // Fonction pour obtenir l'icône de signature
   const getSignatureIcon = (payment: Payment, signatureType: string) => {
     const approval = payment.approvals?.[signatureType as keyof typeof payment.approvals];
     if (approval?.signature) {
@@ -904,7 +640,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     }
   };
 
-  // Fonction pour déterminer si une signature est requise
   const isSignatureRequired = (payment: Payment, signatureType: string): boolean => {
     const userProfession = getUserProfession();
     
@@ -920,17 +655,12 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     return false;
   };
 
-   // Récupération des données utilisateur
-  // const userProfession = getUserProfession();
-  // const userFullName = getUserFullName();
-  // const pendingSignatures = getPendingSignatures();
-
-  // Calcul des statistiques
+  // Statistiques
   const pendingPayments = filteredPayments.filter(payment => payment.status === 'pending');
   const approvedPayments = filteredPayments.filter(payment => payment.status === 'approved');
+  const inProgressPayments = filteredPayments.filter(payment => payment.status === 'in_progress');
   const paidPayments = filteredPayments.filter(payment => payment.status === 'paid');
 
-  // Calcul du taux de décaissement
   const allEngagements = engagements.filter(eng => 
     !selectedGrantId || eng.grantId === selectedGrantId
   );
@@ -941,6 +671,588 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   );
   const totalPaid = allPaidPayments.reduce((sum, payment) => sum + payment.amount, 0);
   const disbursementRate = totalEngaged > 0 ? (totalPaid / totalEngaged) * 100 : 0;
+
+  // Rendu de la colonne de progression
+  const renderProgressColumn = (payment: Payment) => {
+    const progress = getPaymentProgress(payment);
+    const remaining = getRemainingAmount(payment);
+    const isFullyPaidStatus = isFullyPaid(payment);
+    
+    return (
+      <div className="flex flex-col items-center">
+        <div className="flex items-center space-x-2 w-full">
+          <span className="text-xs font-medium text-gray-600 min-w-[40px]">
+            {progress.toFixed(0)}%
+          </span>
+          <div className="w-full max-w-[80px] bg-gray-200 rounded-full h-2">
+            <div 
+              className={`h-2 rounded-full transition-all duration-300 ${
+                isFullyPaidStatus ? 'bg-green-600' : 
+                progress > 0 ? 'bg-blue-600' : 'bg-gray-400'
+              }`}
+              style={{ width: `${Math.min(progress, 100)}%` }}
+            />
+          </div>
+        </div>
+        <div className="text-xs text-gray-500 mt-1">
+          {isFullyPaidStatus ? (
+            <span className="text-green-600 font-medium">✓ Payé</span>
+          ) : (
+            <span>Reste: {formatCurrency(remaining)}</span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Rendu du statut (lecture seule)
+  const renderStatus = (payment: Payment) => {
+    const userProfession = getUserProfession();
+    const isCoordinator = userProfession === 'Coordonnateur National';
+    
+    // Le coordonnateur peut modifier uniquement si le statut est "pending"
+    const canCoordinatorChange = isCoordinator && payment.status === 'pending';
+
+    // Affichage du statut en lecture seule
+    const statusDisplay = (
+      <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PAYMENT_STATUS[payment.status].color}`}>
+        {PAYMENT_STATUS[payment.status].label}
+      </span>
+    );
+
+    // Si le coordonnateur et statut "pending" → sélecteur avec Approuver / Rejeter
+    if (canCoordinatorChange) {
+      return (
+        <div className="text-center">
+          <select
+            value={payment.status}
+            onChange={(e) => {
+              const newStatus = e.target.value as Payment['status'];
+              onUpdatePayment(payment.id, { status: newStatus });
+            }}
+            className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PAYMENT_STATUS[payment.status].color}`}
+          >
+            <option value="pending">En attente</option>
+            <option value="approved">Approuvé</option>
+            <option value="rejected">Rejeté</option>
+          </select>
+        </div>
+      );
+    }
+
+    // Pour tous les autres cas → affichage en lecture seule (y compris comptable)
+    return (
+      <div className="text-center">
+        {statusDisplay}
+        {payment.status === 'in_progress' && (
+          <div className="text-xs text-purple-600 mt-1">
+            {getPaymentProgress(payment).toFixed(0)}% payé
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // Rendu du bouton "Ajouter un paiement partiel"
+  const renderAddPartialPaymentButton = (payment: Payment) => {
+    const remaining = getRemainingAmount(payment);
+    const isFullyPaidStatus = isFullyPaid(payment);
+    
+    // Ne pas afficher si déjà entièrement payé, ou si le statut n'est ni "approved" ni "in_progress"
+    if (isFullyPaidStatus) return null;
+    if (payment.status !== 'approved' && payment.status !== 'in_progress') return null;
+    if (!canModifyStatusComptable()) return null; // seul le comptable peut ajouter des paiements partiels
+    
+    // return (
+    //   <button
+    //     onClick={() => {
+    //       setSelectedPaymentForPartial(payment);
+    //       setPartialPaymentData({
+    //         amount: remaining.toString(),
+    //         date: new Date().toISOString().split('T')[0],
+    //         paymentMethod: payment.paymentMethod,
+    //         checkNumber: '',
+    //         bankReference: '',
+    //         reference: `PART-${payment.paymentNumber}-${Date.now().toString().slice(-4)}`
+    //       });
+    //       setShowPartialPaymentForm(true);
+    //     }}
+    //     className="p-2 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded-lg transition-colors"
+    //     title="Ajouter un paiement partiel"
+    //   >
+    //     <DollarSign className="w-4 h-4" />
+    //   </button>
+    // );
+  };
+
+  // Fonction pour charger le logo
+  const loadImage = (url: string): Promise<HTMLImageElement> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = url;
+    });
+  };
+
+  // Fonction utilitaire pour diviser le texte en lignes
+  const splitTextToLines = (text: string, maxWidth: number, pdf: jsPDF): string[] => {
+    if (!text) return [''];
+    const lines: string[] = [];
+    let currentLine = '';
+    const words = text.split(' ');
+    
+    for (const word of words) {
+      const testLine = currentLine ? currentLine + ' ' + word : word;
+      if (pdf.getTextWidth(testLine) <= maxWidth) {
+        currentLine = testLine;
+      } else {
+        if (currentLine) lines.push(currentLine);
+        currentLine = word;
+      }
+    }
+    if (currentLine) lines.push(currentLine);
+    return lines;
+  };
+
+  // 🎯 EXPORT PDF
+  const exportToPDF = async (exportAllData: boolean = false) => {
+    if (!canExport) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+      return;
+    }
+
+    setIsGeneratingPDF(true);
+    
+    try {
+      const dataToExport = exportAllData ? sortedPayments : currentPayments;
+      
+      if (dataToExport.length === 0) {
+        showWarning('Aucune donnée', 'Aucune donnée à exporter');
+        return;
+      }
+
+      const pdf = new jsPDF('l', 'mm', 'a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      let yPosition = margin;
+      let isFirstPage = true;
+
+      // Charger le logo
+      let logo: HTMLImageElement | null = null;
+      try {
+        logo = await loadImage('/budgetbase/logo.png');
+      } catch (error) {
+        console.warn('Logo non chargé');
+      }
+
+      const addHeader = (isFirstPage: boolean = true) => {
+        let y = margin;
+
+        if (isFirstPage && logo) {
+          const logoWidth = 20;
+          const logoHeight = (logo.height * logoWidth) / logo.width;
+          pdf.addImage(logo, 'PNG', margin, y, logoWidth, logoHeight);
+          y += logoHeight + 3;
+        }
+
+        pdf.setFontSize(14);
+        pdf.setFont('helvetica', 'bold');
+        pdf.text('LISTE DES PAIEMENTS', pageWidth / 2, y, { align: 'center' });
+        y += 6;
+
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'normal');
+        if (activeGrant) {
+          pdf.text(`Subvention: ${activeGrant.name}`, margin, y);
+          pdf.text(`Référence: ${activeGrant.reference}`, margin + 100, y);
+          y += 4.5;
+        }
+        pdf.text(`Généré le: ${new Date().toLocaleDateString('fr-FR')}`, margin, y);
+        y += 5;
+
+        pdf.line(margin, y, pageWidth - margin, y);
+        y += 4;
+
+        return y;
+      };
+
+      yPosition = addHeader(true);
+
+      // === COLONNES RÉPARTIES SUR TOUTE LA LARGEUR ===
+      const headers = [
+        'N° Paiement', 
+        'Date', 
+        'Engagement', 
+        'Ligne Budgétaire', 
+        'Sous-Ligne', 
+        'Fournisseur', 
+        'Montant', 
+        'Payé', 
+        'Reste', 
+        'Prog.', 
+        'Statut'
+      ];
+      
+      const totalWidth = pageWidth - (margin * 2);
+      const weights = [1.0, 0.8, 1.2, 1.4, 1.2, 1.2, 0.9, 0.9, 0.9, 0.6, 0.9];
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+      const columnWidths = weights.map(w => (w / totalWeight) * totalWidth);
+      
+      let xPos = margin;
+
+      // En-tête du tableau
+      const headerHeight = 7;
+      pdf.setFillColor(59, 130, 246);
+      pdf.rect(margin, yPosition, totalWidth, headerHeight, 'F');
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(6);
+      pdf.setFont('helvetica', 'bold');
+
+      headers.forEach((header, index) => {
+        const align = (index === 6 || index === 7 || index === 8 || index === 9) ? 'right' : 'left';
+        const xOffset = align === 'right' ? columnWidths[index] - 1 : 1;
+        pdf.text(header, xPos + xOffset, yPosition + 4.5, { align: align === 'right' ? 'right' : 'left' });
+        xPos += columnWidths[index];
+      });
+
+      yPosition += headerHeight;
+      pdf.setTextColor(0, 0, 0);
+      pdf.setFont('helvetica', 'normal');
+
+      const statusLabels: Record<string, string> = {
+        pending: 'En attente',
+        approved: 'Approuvé',
+        in_progress: 'En cours',
+        paid: 'Payé',
+        rejected: 'Rejeté'
+      };
+
+      const formatAmount = (amount: number) => {
+        return Math.round(amount).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+      };
+      const currencySymbol = getCurrencySymbol(activeGrant?.currency || 'EUR');
+
+      // Fonction pour calculer la hauteur nécessaire pour une cellule
+      const getCellHeight = (text: string, width: number, fontSize: number = 5.5): number => {
+        if (!text) return 5;
+        const maxWidth = width - 2;
+        const lines = splitTextToLines(text, maxWidth, pdf);
+        return Math.max(5, lines.length * 3 + 2);
+      };
+
+      // Pré-calculer la hauteur de chaque ligne
+      const rowHeights = dataToExport.map((payment) => {
+        const engagement = getEngagement(payment.engagementId);
+        const budgetLine = getBudgetLine(payment.budgetLineId);
+        const subBudgetLine = getSubBudgetLine(payment.subBudgetLineId);
+        
+        const budgetLineText = budgetLine ? `${budgetLine.code} - ${budgetLine.name}` : 'N/A';
+        const subBudgetLineText = subBudgetLine ? `${subBudgetLine.code} - ${subBudgetLine.name}` : 'N/A';
+        const supplierText = payment.supplier || 'Non spécifié';
+        
+        const h1 = getCellHeight(payment.paymentNumber, columnWidths[0]);
+        const h2 = getCellHeight(new Date(payment.date).toLocaleDateString('fr-FR'), columnWidths[1]);
+        const h3 = getCellHeight(engagement?.engagementNumber || 'N/A', columnWidths[2]);
+        const h4 = getCellHeight(budgetLineText, columnWidths[3]);
+        const h5 = getCellHeight(subBudgetLineText, columnWidths[4]);
+        const h6 = getCellHeight(supplierText, columnWidths[5]);
+        const h7 = getCellHeight(`${formatAmount(payment.amount)} ${currencySymbol}`, columnWidths[6]);
+        const h8 = getCellHeight(`${formatAmount(getTotalPaid(payment))} ${currencySymbol}`, columnWidths[7]);
+        const h9 = getCellHeight(`${formatAmount(getRemainingAmount(payment))} ${currencySymbol}`, columnWidths[8]);
+        const h10 = getCellHeight(`${getPaymentProgress(payment).toFixed(0)}%`, columnWidths[9]);
+        const h11 = getCellHeight(statusLabels[payment.status] || payment.status, columnWidths[10]);
+        
+        return Math.max(h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, h11, 6);
+      });
+
+      // Dessiner les lignes avec hauteur dynamique
+      dataToExport.forEach((payment, index) => {
+        const rowHeight = rowHeights[index];
+        
+        // Vérifier si on doit passer à une nouvelle page
+        if (yPosition + rowHeight > pageHeight - margin) {
+          pdf.addPage();
+          yPosition = margin;
+          isFirstPage = false;
+          
+          // En-tête du tableau sur les pages suivantes
+          pdf.line(margin, yPosition, pageWidth - margin, yPosition);
+          yPosition += 2;
+          
+          pdf.setFillColor(59, 130, 246);
+          pdf.rect(margin, yPosition, totalWidth, headerHeight, 'F');
+          pdf.setTextColor(255, 255, 255);
+          pdf.setFontSize(6);
+          pdf.setFont('helvetica', 'bold');
+          
+          xPos = margin;
+          headers.forEach((header, idx) => {
+            const align = (idx === 6 || idx === 7 || idx === 8 || idx === 9) ? 'right' : 'left';
+            const xOffset = align === 'right' ? columnWidths[idx] - 1 : 1;
+            pdf.text(header, xPos + xOffset, yPosition + 4.5, { align: align === 'right' ? 'right' : 'left' });
+            xPos += columnWidths[idx];
+          });
+          
+          yPosition += headerHeight;
+          pdf.setTextColor(0, 0, 0);
+          pdf.setFont('helvetica', 'normal');
+        }
+
+        // Alternance des couleurs de ligne
+        if (index % 2 === 0) {
+          pdf.setFillColor(249, 250, 251);
+          pdf.rect(margin, yPosition, totalWidth, rowHeight, 'F');
+        }
+
+        const engagement = getEngagement(payment.engagementId);
+        const budgetLine = getBudgetLine(payment.budgetLineId);
+        const subBudgetLine = getSubBudgetLine(payment.subBudgetLineId);
+        const totalPaid = getTotalPaid(payment);
+        const remaining = getRemainingAmount(payment);
+        const progress = getPaymentProgress(payment);
+
+        pdf.setFontSize(5.5);
+        xPos = margin;
+
+        // Fonction pour écrire du texte avec gestion des lignes multiples
+        const writeCellText = (text: string, width: number, align: 'left' | 'right' = 'left') => {
+          const maxWidth = width - 2;
+          const lines = splitTextToLines(text, maxWidth, pdf);
+          const totalLines = lines.length;
+          const startY = yPosition + 3 + (rowHeight - totalLines * 3) / 2;
+          
+          lines.forEach((line, lineIndex) => {
+            const y = startY + (lineIndex * 3);
+            if (align === 'right') {
+              pdf.text(line, xPos + width - 1, y, { align: 'right' });
+            } else {
+              pdf.text(line, xPos + 1, y);
+            }
+          });
+        };
+
+        // 1. N° Paiement
+        writeCellText(payment.paymentNumber, columnWidths[0]);
+        xPos += columnWidths[0];
+
+        // 2. Date
+        writeCellText(new Date(payment.date).toLocaleDateString('fr-FR'), columnWidths[1]);
+        xPos += columnWidths[1];
+
+        // 3. Engagement
+        writeCellText(engagement?.engagementNumber || 'N/A', columnWidths[2]);
+        xPos += columnWidths[2];
+
+        // 4. Ligne Budgétaire
+        const budgetLineText = budgetLine ? `${budgetLine.code} - ${budgetLine.name}` : 'N/A';
+        writeCellText(budgetLineText, columnWidths[3]);
+        xPos += columnWidths[3];
+
+        // 5. Sous-Ligne
+        const subBudgetLineText = subBudgetLine ? `${subBudgetLine.code} - ${subBudgetLine.name}` : 'N/A';
+        writeCellText(subBudgetLineText, columnWidths[4]);
+        xPos += columnWidths[4];
+
+        // 6. Fournisseur
+        writeCellText(payment.supplier || 'Non spécifié', columnWidths[5]);
+        xPos += columnWidths[5];
+
+        // 7. Montant (aligné à droite)
+        writeCellText(`${formatAmount(payment.amount)} ${currencySymbol}`, columnWidths[6], 'right');
+        xPos += columnWidths[6];
+
+        // 8. Payé (aligné à droite)
+        writeCellText(`${formatAmount(totalPaid)} ${currencySymbol}`, columnWidths[7], 'right');
+        xPos += columnWidths[7];
+
+        // 9. Reste (aligné à droite)
+        writeCellText(`${formatAmount(remaining)} ${currencySymbol}`, columnWidths[8], 'right');
+        xPos += columnWidths[8];
+
+        // 10. Progression (aligné à droite)
+        writeCellText(`${progress.toFixed(0)}%`, columnWidths[9], 'right');
+        xPos += columnWidths[9];
+
+        // 11. Statut
+        writeCellText(statusLabels[payment.status] || payment.status, columnWidths[10]);
+
+        yPosition += rowHeight;
+      });
+
+      // Ajouter une ligne de total
+      if (yPosition + 8 > pageHeight - margin) {
+        pdf.addPage();
+        yPosition = margin;
+        isFirstPage = false;
+      }
+
+      const totalAmount = dataToExport.reduce((sum, eng) => sum + eng.amount, 0);
+      const totalPaidAmount = dataToExport.reduce((sum, eng) => sum + getTotalPaid(eng), 0);
+      const totalRemainingAmount = dataToExport.reduce((sum, p) => sum + getRemainingAmount(p), 0);
+      const overallProgress = totalAmount > 0 ? (totalPaidAmount / totalAmount) * 100 : 0;
+
+      pdf.setFillColor(243, 244, 246);
+      pdf.rect(margin, yPosition, totalWidth, 7, 'F');
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(6);
+
+      xPos = margin;
+      const totalLabelWidth = columnWidths[0] + columnWidths[1] + columnWidths[2] + columnWidths[3] + columnWidths[4] + columnWidths[5];
+      pdf.text('TOTAL', xPos + 1, yPosition + 4.5);
+      xPos += totalLabelWidth;
+
+      pdf.text(`${formatAmount(totalAmount)} ${currencySymbol}`, xPos + columnWidths[6] - 1, yPosition + 4.5, { align: 'right' });
+      xPos += columnWidths[6];
+
+      pdf.text(`${formatAmount(totalPaidAmount)} ${currencySymbol}`, xPos + columnWidths[7] - 1, yPosition + 4.5, { align: 'right' });
+      xPos += columnWidths[7];
+
+      pdf.text(`${formatAmount(totalRemainingAmount)} ${currencySymbol}`, xPos + columnWidths[8] - 1, yPosition + 4.5, { align: 'right' });
+      xPos += columnWidths[8];
+
+      pdf.text(`${overallProgress.toFixed(0)}%`, xPos + columnWidths[9] - 1, yPosition + 4.5, { align: 'right' });
+
+      // Numéros de page en bas
+      const pageCount = pdf.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        pdf.setPage(i);
+        pdf.setFontSize(7);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setTextColor(100, 100, 100);
+        pdf.text(
+          `Page ${i} sur ${pageCount}`,
+          pageWidth / 2,
+          pageHeight - 8,
+          { align: 'center' }
+        );
+        pdf.text(
+          `© ${new Date().getFullYear()} BudgetBase - Document généré automatiquement`,
+          pageWidth / 2,
+          pageHeight - 4,
+          { align: 'center' }
+        );
+      }
+
+      const suffix = exportAllData ? 'complet' : 'page';
+      pdf.save(`paiements-${suffix}-${activeGrant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.pdf`);
+      showSuccess('Export réussi', 'La liste des paiements a été exportée avec succès');
+      
+    } catch (error) {
+      console.error('Erreur lors de la génération du PDF:', error);
+      showError('Erreur', 'Erreur lors de la génération du PDF. Veuillez réessayer.');
+    } finally {
+      setIsGeneratingPDF(false);
+    }
+  };
+
+  // 🎯 EXPORT EXCEL
+  const exportToExcel = async (exportAllData: boolean = false) => {
+    if (!canExport) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+      return;
+    }
+
+    setIsGeneratingExcel(true);
+    
+    try {
+      const dataToExport = exportAllData ? sortedPayments : currentPayments;
+      
+      if (dataToExport.length === 0) {
+        showWarning('Aucune donnée', 'Aucune donnée à exporter');
+        return;
+      }
+
+      const statusLabels: Record<string, string> = {
+        pending: 'En attente',
+        approved: 'Approuvé',
+        in_progress: 'En cours',
+        paid: 'Payé',
+        rejected: 'Rejeté'
+      };
+
+      const currencySymbol = getCurrencySymbol(activeGrant?.currency || 'EUR');
+
+      const infoLines: string[] = [];
+      if (activeGrant) {
+        infoLines.push(`Subvention : ${activeGrant.name}`);
+        infoLines.push(`Référence : ${activeGrant.reference}   •   Devise : ${activeGrant.currency}`);
+      }
+      infoLines.push(`Généré le : ${new Date().toLocaleDateString('fr-FR')}`);
+
+      const dataRows = dataToExport.map((payment) => {
+        const engagement = getEngagement(payment.engagementId);
+        const budgetLine = getBudgetLine(payment.budgetLineId);
+        const subBudgetLine = getSubBudgetLine(payment.subBudgetLineId);
+        const totalPaid = getTotalPaid(payment);
+        const remaining = getRemainingAmount(payment);
+        const progress = getPaymentProgress(payment);
+
+        return [
+          payment.paymentNumber,
+          new Date(payment.date).toLocaleDateString('fr-FR'),
+          engagement?.engagementNumber || 'N/A',
+          budgetLine ? `${budgetLine.code} - ${budgetLine.name}` : 'N/A',
+          subBudgetLine ? `${subBudgetLine.code} - ${subBudgetLine.name}` : 'N/A',
+          payment.supplier || 'Non spécifié',
+          payment.description || '',
+          `${payment.amount.toLocaleString('fr-FR')} ${currencySymbol}`,
+          `${totalPaid.toLocaleString('fr-FR')} ${currencySymbol}`,
+          `${remaining.toLocaleString('fr-FR')} ${currencySymbol}`,
+          `${progress.toFixed(1)}%`,
+          statusLabels[payment.status] || payment.status
+        ];
+      });
+
+      const totalAmount = dataToExport.reduce((sum, eng) => sum + eng.amount, 0);
+      const totalPaidAmount = dataToExport.reduce((sum, eng) => sum + getTotalPaid(eng), 0);
+      const totalRemainingAmount = dataToExport.reduce((sum, p) => sum + getRemainingAmount(p), 0);
+      const overallProgress = totalAmount > 0 ? (totalPaidAmount / totalAmount) * 100 : 0;
+
+      const totalsRow = [
+        'TOTAUX', '', '', '', '', '', '',
+        `${totalAmount.toLocaleString('fr-FR')} ${currencySymbol}`,
+        `${totalPaidAmount.toLocaleString('fr-FR')} ${currencySymbol}`,
+        `${totalRemainingAmount.toLocaleString('fr-FR')} ${currencySymbol}`,
+        `${overallProgress.toFixed(1)}%`,
+        ''
+      ];
+
+      const suffix = exportAllData ? 'complet' : 'page';
+      const fileName = `paiements-${suffix}-${activeGrant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.xlsx`;
+
+      exportStyledExcel({
+        fileName,
+        sheetName: exportAllData ? 'Tous les paiements' : 'Paiements page',
+        title: 'LISTE DES PAIEMENTS',
+        infoLines,
+        columns: [
+          { header: 'N° Paiement', width: 18 },
+          { header: 'Date', width: 15, align: 'center' },
+          { header: 'Engagement', width: 18 },
+          { header: 'Ligne Budgétaire', width: 30 },
+          { header: 'Sous-Ligne Budgétaire', width: 30 },
+          { header: 'Fournisseur', width: 25 },
+          { header: 'Description Paiement', width: 50 },
+          { header: 'Montant', width: 18, align: 'right' },
+          { header: 'Payé', width: 18, align: 'right' },
+          { header: 'Reste', width: 18, align: 'right' },
+          { header: 'Progression', width: 12, align: 'center' },
+          { header: 'Statut', width: 15, align: 'center' },
+        ],
+        rows: dataRows,
+        totalsRow,
+      });
+
+      showSuccess('Export réussi', 'Le fichier Excel a été généré avec succès');
+    } catch (error) {
+      console.error('Erreur lors de l\'export Excel:', error);
+      showError('Erreur', 'Impossible de générer le fichier Excel');
+    } finally {
+      setIsGeneratingExcel(false);
+    }
+  };
 
   // 🚨 VÉRIFICATIONS DE CHARGEMENT ET PERMISSIONS
   if (permissionsLoading) {
@@ -966,54 +1278,38 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     );
   }
 
-  
-
-  // 🎯 RENDU PRINCIPAL
   return (
     <div className="space-y-6">
-      {/* Header avec notifications de signatures en attente */}
+      {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">Gestion des Paiements</h2>
           <p className="text-gray-600 mt-1">Suivi et validation des paiements basés sur les engagements approuvés</p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          {/* Notification des signatures en attente */}
-          {pendingSignatures.length > 0 && (
-            <div className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-2">
-              <div className="flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 text-orange-600" />
-                <span className="text-sm font-medium text-orange-800">
-                  {pendingSignatures.length} signature(s) en attente
-                </span>
-              </div>
-            </div>
-          )}
-          
-          {/* {canCreate && (
+          {canViewSignatureSection() && (
             <button
-              onClick={() => {
-                if (filteredAvailableEngagements.length === 0) {
-                  showWarning(
-                    'Aucun engagement disponible',
-                    'Aucun engagement approuvé n\'est disponible pour créer un paiement'
-                  );
-                  return;
-                }
-                setShowForm(true);
-              }}
-              className="bg-gradient-to-r from-green-600 to-blue-600 text-white px-6 py-3 rounded-xl font-medium hover:shadow-lg transform hover:scale-[1.02] transition-all duration-200 flex items-center space-x-2"
+              type="button"
+              onClick={() => setShowOnlyToSign(prev => !prev)}
+              className={`rounded-lg px-4 py-2 border transition-colors flex items-center space-x-2 ${
+                showOnlyToSign
+                  ? 'bg-orange-600 border-orange-600 text-white'
+                  : 'bg-orange-50 border-orange-200 text-orange-800 hover:bg-orange-100'
+              }`}
+              title="Afficher uniquement les paiements qui me restent à signer"
             >
-              <Plus className="w-5 h-5" />
-              <span>Créer un Paiement</span>
+              <AlertCircle className="w-4 h-4" />
+              <span className="text-sm font-medium">
+                {showOnlyToSign ? 'Tout afficher' : `À signer (${toSignCount})`}
+              </span>
             </button>
-          )} */}
+          )}
         </div>
       </div>
 
       {/* Barre de recherche et filtres */}
       <div className="bg-white rounded-2xl p-4 border border-gray-100">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
           <div className="relative">
             <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
             <input
@@ -1021,7 +1317,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
               placeholder="Rechercher paiement, fournisseur, engagement..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
             />
           </div>
           
@@ -1029,48 +1325,110 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
             >
               <option value="all">Tous les statuts</option>
               <option value="pending">En attente</option>
               <option value="approved">Approuvé</option>
+              <option value="in_progress">En cours</option>
               <option value="paid">Payé</option>
-              {/* <option value="cashed">Encaissé</option> */}
               <option value="rejected">Rejeté</option>
             </select>
           </div>
-          
+
           <div>
-            <input
-              type="date"
-              value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Filtrer par date"
-            />
+            <select
+              value={budgetLineFilter}
+              onChange={(e) => setBudgetLineFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+            >
+              <option value="">Toutes les lignes</option>
+              {budgetLines.map(line => (
+                <option key={line.id} value={line.id}>{line.code} - {line.name}</option>
+              ))}
+            </select>
           </div>
-          
+
+          <div>
+            <select
+              value={subBudgetLineFilter}
+              onChange={(e) => setSubBudgetLineFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+            >
+              <option value="">Toutes les sous-lignes</option>
+              {subBudgetLines
+                .filter(line => !budgetLineFilter || line.budgetLineId === budgetLineFilter)
+                .map(line => (
+                  <option key={line.id} value={line.id}>{line.code} - {line.name}</option>
+                ))
+              }
+            </select>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
             <input
               type="text"
               placeholder="Filtrer par fournisseur"
               value={supplierFilter}
               onChange={(e) => setSupplierFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
             />
           </div>
+          
+          <div>
+            <button
+              onClick={() => setShowDateRange(!showDateRange)}
+              className="w-full flex items-center justify-between px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+            >
+              <span className="flex items-center gap-2">
+                <Calendar className="w-4 h-4" />
+                {showDateRange ? 'Période personnalisée' : 'Filtrer par période'}
+              </span>
+              <ChevronDown className={`w-4 h-4 transition-transform ${showDateRange ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
         </div>
+
+        {showDateRange && (
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Date de début</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1">Date de fin</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+              />
+            </div>
+          </div>
+        )}
         
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-3">
           <div className="flex items-center space-x-4 text-sm text-gray-600">
             <span>{sortedPayments.length} paiement(s) trouvé(s)</span>
-            {(searchTerm || statusFilter !== 'all' || dateFilter || supplierFilter) && (
+            {(searchTerm || statusFilter !== 'all' || showOnlyToSign || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate) && (
               <button
                 onClick={() => {
                   setSearchTerm('');
                   setStatusFilter('all');
-                  setDateFilter('');
+                  setShowOnlyToSign(false);
                   setSupplierFilter('');
+                  setBudgetLineFilter('');
+                  setSubBudgetLineFilter('');
+                  setStartDate('');
+                  setEndDate('');
+                  setShowDateRange(false);
                 }}
                 className="text-blue-600 hover:text-blue-800 text-sm font-medium"
               >
@@ -1078,16 +1436,36 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
               </button>
             )}
           </div>
+          
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-600">Lignes par page:</span>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => {
+                setItemsPerPage(Number(e.target.value));
+                setCurrentPage(1);
+              }}
+              className="px-2 py-1 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+              <option value="500">500</option>
+            </select>
+          </div>
         </div>
       </div>
 
       {/* Grant Information */}
       {activeGrant && (
-        <div className="bg-gradient-to-r from-green-50 to-blue-50 rounded-2xl p-6 border border-green-200">
-          <div className="flex items-center justify-between mb-4">
+        <div className="bg-gradient-to-r from-green-50 to-blue-50 rounded-2xl p-4 border border-green-200">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
             <div>
               <h3 className="text-lg font-semibold text-gray-900">{activeGrant.name}</h3>
-              <p className="text-gray-600">{activeGrant.reference} - {activeGrant.grantingOrganization}</p>
+              <p className="text-gray-600 text-sm">{activeGrant.reference} - {activeGrant.grantingOrganization}</p>
             </div>
             <div className="text-right">
               <p className="text-sm text-gray-600">Devise</p>
@@ -1100,8 +1478,8 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
       )}
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-sm font-medium text-gray-600">Engagements Disponibles</p>
@@ -1113,10 +1491,10 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Paiements en Attente</p>
+              <p className="text-sm font-medium text-gray-600">En Attente</p>
               <p className="text-2xl font-bold text-yellow-600">{pendingPayments.length}</p>
             </div>
             <div className="p-3 bg-yellow-100 rounded-full">
@@ -1125,51 +1503,46 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Paiements Approuvés</p>
-              <p className="text-2xl font-bold text-green-600">{approvedPayments.length}</p>
+              <p className="text-sm font-medium text-gray-600">Approuvés</p>
+              <p className="text-2xl font-bold text-blue-600">{approvedPayments.length}</p>
             </div>
-            <div className="p-3 bg-green-100 rounded-full">
-              <CheckCircle className="w-6 h-6 text-green-600" />
+            <div className="p-3 bg-blue-100 rounded-full">
+              <CheckCircle className="w-6 h-6 text-blue-600" />
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Paiements Effectués</p>
-              <p className="text-2xl font-bold text-purple-600">{paidPayments.length}</p>
+              <p className="text-sm font-medium text-gray-600">En Cours</p>
+              <p className="text-2xl font-bold text-purple-600">{inProgressPayments.length}</p>
             </div>
             <div className="p-3 bg-purple-100 rounded-full">
-              <CreditCard className="w-6 h-6 text-purple-600" />
+              <TrendingUp className="w-6 h-6 text-purple-600" />
             </div>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm font-medium text-gray-600">Taux de Décaissement</p>
-              <p className="text-2xl font-bold text-indigo-600">{disbursementRate.toFixed(1)}%</p>
-              <p className="text-sm text-gray-500 mt-1">
-                {formatCurrency(totalPaid)} payés
-              </p>
+              <p className="text-sm font-medium text-gray-600">Payés</p>
+              <p className="text-2xl font-bold text-green-600">{paidPayments.length}</p>
             </div>
-            <div className="p-3 bg-indigo-100 rounded-full">
-              <TrendingUp className="w-6 h-6 text-indigo-600" />
+            <div className="p-3 bg-green-100 rounded-full">
+              <CreditCard className="w-6 h-6 text-green-600" />
             </div>
           </div>
         </div>
       </div>
 
-      
-
       {/* Quick Access to Create Payments */}
       {filteredAvailableEngagements.length > 0 && canCreate && (
-        <div className="bg-gradient-to-r from-green-50 to-blue-50 rounded-2xl p-6 border border-green-200">
+        <div className="bg-gradient-to-r from-green-50 to-blue-50 rounded-2xl p-4 border border-green-200">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-3">
               <div className="p-2 bg-green-100 rounded-lg">
@@ -1177,11 +1550,11 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
               </div>
               <div>
                 <h3 className="text-lg font-semibold text-gray-900">Créer des Fiches de Paiement</h3>
-                <p className="text-gray-600">{filteredAvailableEngagements.length} engagement{filteredAvailableEngagements.length > 1 ? 's' : ''} prêt{filteredAvailableEngagements.length > 1 ? 's' : ''} pour paiement</p>
+                <p className="text-gray-600 text-sm">{filteredAvailableEngagements.length} engagement{filteredAvailableEngagements.length > 1 ? 's' : ''} prêt{filteredAvailableEngagements.length > 1 ? 's' : ''} pour paiement</p>
               </div>
             </div>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {filteredAvailableEngagements.slice(0, 6).map(engagement => {
               const budgetLine = getBudgetLine(engagement.budgetLineId);
@@ -1189,13 +1562,13 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
               return (
                 <div key={engagement.id} className="bg-white rounded-xl p-4 border border-gray-200 hover:shadow-md transition-shadow">
                   <div className="flex items-start justify-between mb-3">
-                    <div className="flex-1">
-                      <h4 className="font-semibold text-gray-900 text-sm">{engagement.engagementNumber}</h4>
-                      <p className="text-xs text-gray-600 mb-1">{engagement.supplier}</p>
-                      <p className="text-xs text-gray-500">{budgetLine?.name}</p>
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-gray-900 text-sm truncate">{engagement.engagementNumber}</h4>
+                      <p className="text-xs text-gray-600 truncate">{engagement.supplier || 'Fournisseur non spécifié'}</p>
+                      <p className="text-xs text-gray-500 truncate">{budgetLine?.name || ''}</p>
                     </div>
-                    <div className="text-right">
-                      <p className="font-bold text-green-600 text-sm">
+                    <div className="text-right flex-shrink-0 ml-2">
+                      <p className="font-bold text-green-600 text-sm whitespace-nowrap">
                         {formatCurrency(engagement.amount)}
                       </p>
                     </div>
@@ -1213,7 +1586,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
           </div>
           
           {filteredAvailableEngagements.length > 6 && (
-            <div className="mt-4 text-center">
+            <div className="mt-3 text-center">
               <p className="text-sm text-gray-600">
                 Et {filteredAvailableEngagements.length - 6} autre{filteredAvailableEngagements.length - 6 > 1 ? 's' : ''} engagement{filteredAvailableEngagements.length - 6 > 1 ? 's' : ''} disponible{filteredAvailableEngagements.length - 6 > 1 ? 's' : ''}...
               </p>
@@ -1222,9 +1595,47 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
         </div>
       )}
 
-      {/* Payments List - MODIFIÉ avec pagination intégrée et contenu expansible */}
+      {/* Boutons d'export */}
+      {canExport && sortedPayments.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => exportToPDF(false)}
+            disabled={isGeneratingPDF}
+            className="bg-blue-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-1 disabled:opacity-50"
+          >
+            <FileText className="w-4 h-4" />
+            <span>PDF Page</span>
+          </button>
+          <button
+            onClick={() => exportToPDF(true)}
+            disabled={isGeneratingPDF}
+            className="bg-blue-800 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-blue-900 flex items-center gap-1 disabled:opacity-50"
+          >
+            <FileText className="w-4 h-4" />
+            <span>PDF Complet</span>
+          </button>
+          <button
+            onClick={() => exportToExcel(false)}
+            disabled={isGeneratingExcel}
+            className="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-green-700 flex items-center gap-1 disabled:opacity-50"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Excel Page</span>
+          </button>
+          <button
+            onClick={() => exportToExcel(true)}
+            disabled={isGeneratingExcel}
+            className="bg-green-800 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-green-900 flex items-center gap-1 disabled:opacity-50"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Excel Complet</span>
+          </button>
+        </div>
+      )}
+
+      {/* Payments List */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="px-6 py-4 border-b border-gray-200">
+        <div className="px-4 py-4 border-b border-gray-200">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
             <h3 className="text-lg font-semibold text-gray-900">
               Liste des Paiements
@@ -1234,24 +1645,15 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                 </span>
               )}
             </h3>
-            
-            {/* Sélecteur du nombre de lignes par page */}
-            <div className="flex items-center space-x-2">
-              <span className="text-sm text-gray-600">Lignes par page:</span>
-              <select
-                value={itemsPerPage}
-                onChange={(e) => {
-                  setItemsPerPage(Number(e.target.value));
-                  setCurrentPage(1); // Retour à la première page
-                }}
-                className="px-3 py-1 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            <div className="flex items-center gap-2">
+              {/* Bouton Tout développer / Tout réduire */}
+              <button
+                onClick={toggleAllRows}
+                className="px-3 py-1.5 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors flex items-center gap-1"
               >
-                <option value={5}>5</option>
-                <option value={10}>10</option>
-                <option value={25}>25</option>
-                <option value={50}>50</option>
-                <option value={100}>100</option>
-              </select>
+                <ChevronsUpDown className="w-4 h-4" />
+                {expandAll ? 'Tout réduire' : 'Tout développer'}
+              </button>
             </div>
           </div>
         </div>
@@ -1262,13 +1664,13 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
               <CreditCard className="w-8 h-8 text-gray-400" />
             </div>
             <h3 className="text-lg font-medium text-gray-900 mb-2">
-              {searchTerm || statusFilter !== 'all' || dateFilter || supplierFilter 
+              {searchTerm || statusFilter !== 'all' || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate 
                 ? 'Aucun paiement ne correspond aux critères de recherche' 
                 : selectedGrantId ? 'Aucun paiement pour cette subvention' : 'Aucun paiement'
               }
             </h3>
             <p className="text-gray-500">
-              {searchTerm || statusFilter !== 'all' || dateFilter || supplierFilter
+              {searchTerm || statusFilter !== 'all' || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate
                 ? 'Essayez de modifier vos critères de recherche'
                 : selectedGrantId ? 'Aucun paiement n\'a été créé pour cette subvention' : 'Les paiements apparaîtront ici une fois créés'
               }
@@ -1277,11 +1679,20 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
         ) : (
           <>
             <div className="overflow-x-auto">
-              <table className="w-full">
+              <table className="w-full min-w-[1200px]">
                 <thead className="bg-gray-50">
                   <tr>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap"
+                      onClick={() => handleSort('date')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Date</span>
+                        {getSortIcon('date')}
+                      </div>
+                    </th>
+                    <th 
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap"
                       onClick={() => handleSort('paymentNumber')}
                     >
                       <div className="flex items-center space-x-1">
@@ -1290,22 +1701,25 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                       </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
-                      onClick={() => handleSort('date')}
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap"
+                      onClick={() => handleSort('engagementNumber')}
                     >
                       <div className="flex items-center space-x-1">
-                        <span>Date</span>
-                        {getSortIcon('date')}
+                        <span>Engagement</span>
+                        {getSortIcon('engagementNumber')}
                       </div>
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Engagement
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Fournisseur
+                    <th 
+                      className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap"
+                      onClick={() => handleSort('supplier')}
+                    >
+                      <div className="flex items-center space-x-1">
+                        <span>Fournisseur</span>
+                        {getSortIcon('supplier')}
+                      </div>
                     </th>
                     <th 
-                      className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
+                      className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap"
                       onClick={() => handleSort('amount')}
                     >
                       <div className="flex items-center justify-end space-x-1">
@@ -1313,13 +1727,21 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                         {getSortIcon('amount')}
                       </div>
                     </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    {/* COLONNE : Payé */}
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                      <span>Payé</span>
+                    </th>
+                    {/* COLONNE : Reste */}
+                    <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
+                      <span>Reste</span>
+                    </th>
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                       Signatures
                     </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                       Statut
                     </th>
-                    <th className="px-6 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">
                       Actions
                     </th>
                   </tr>
@@ -1329,37 +1751,36 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                     const engagement = getEngagement(payment.engagementId);
                     const budgetLine = getBudgetLine(payment.budgetLineId);
                     const isExpanded = expandedRows.has(payment.id);
+                    const isFullyPaidStatus = isFullyPaid(payment);
+                    const hasPartials = hasPartialPayments(payment);
+                    const totalPaid = getTotalPaid(payment);
+                    const remaining = getRemainingAmount(payment);
+                    const progress = getPaymentProgress(payment);
                     
                     return (
                       <React.Fragment key={payment.id}>
-                        <tr className="hover:bg-gray-50">
-                          <td className="px-6 py-4">
-                            <div>
-                              <div className="text-sm font-medium text-gray-900">{payment.paymentNumber}</div>
-                              <div className="text-sm text-gray-500">
-                                {new Date(payment.date).toLocaleDateString('fr-FR')}
-                              </div>
-                              <div className="text-xs text-gray-400">
-                                {payment.paymentMethod === 'check' ? 'Chèque' : 
-                                 payment.paymentMethod === 'transfer' ? 'Virement' : 'Espèces'}
-                                {payment.checkNumber && ` N°${payment.checkNumber}`}
-                              </div>
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 text-sm text-gray-900">
+                        <tr className={`hover:bg-gray-50 ${isFullyPaidStatus ? 'bg-green-50/30' : ''}`}>
+                          <td className="px-4 py-4 text-sm text-gray-900 whitespace-nowrap">
                             {new Date(payment.date).toLocaleDateString('fr-FR')}
                           </td>
-                          <td className="px-6 py-4">
+                          <td className="px-4 py-4">
                             <div 
                               className="cursor-pointer hover:text-blue-600 transition-colors"
                               onClick={() => toggleRowExpansion(payment.id)}
                             >
-                              <div className="text-sm text-gray-900">
-                                {isExpanded ? engagement?.engagementNumber : truncateText(engagement?.engagementNumber || '', 15)}
+                              <div className="text-sm font-medium text-gray-900">
+                                {payment.paymentNumber}
                               </div>
-                              <div className="text-sm text-gray-500">
-                                {isExpanded ? budgetLine?.name : truncateText(budgetLine?.name || '', 20)}
+                              <div className="text-xs text-gray-400">
+                                {payment.paymentMethod === 'check' ? 'Chèque' : 
+                                payment.paymentMethod === 'transfer' ? 'Virement' : 'Espèces'}
+                                {payment.checkNumber && ` N°${payment.checkNumber}`}
                               </div>
+                              {hasPartials && (
+                                <div className="text-xs text-purple-600 mt-1">
+                                  {payment.partialPayments?.length || 0} paiement{payment.partialPayments?.length > 1 ? 's' : ''} partiel{payment.partialPayments?.length > 1 ? 's' : ''}
+                                </div>
+                              )}
                               {!isExpanded && (
                                 <div className="text-xs text-blue-600 mt-1 flex items-center">
                                   <ChevronDown className="w-3 h-3 mr-1" />
@@ -1374,15 +1795,42 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                               )}
                             </div>
                           </td>
-                          <td className="px-6 py-4 text-sm text-gray-900">
+                          <td className="px-4 py-4">
+                            <div className="text-sm text-gray-900">{engagement?.engagementNumber || 'N/A'}</div>
+                            <div className="text-sm text-gray-500 truncate max-w-[120px]" title={budgetLine?.name}>
+                              {budgetLine?.name || ''}
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 text-sm text-gray-900">
                             {payment.supplier}
                           </td>
-                          <td className="px-6 py-4 text-right text-sm font-medium text-gray-900">
+                          <td className="px-4 py-4 text-right text-sm font-medium text-gray-900 whitespace-nowrap">
                             {formatCurrency(payment.amount)}
                           </td>
-                          <td className="px-6 py-4 text-center">
+                          {/* COLONNE : Payé */}
+                          <td className="px-4 py-4 text-right text-sm font-medium whitespace-nowrap">
+                            {totalPaid > 0 ? (
+                              <span className="text-green-600">{formatCurrency(totalPaid)}</span>
+                            ) : (
+                              <span className="text-gray-400">0</span>
+                            )}
+                            {isFullyPaidStatus && (
+                              <div className="text-xs text-green-600 font-medium">
+                                ✓ Payé
+                              </div>
+                            )}
+                          </td>
+                          {/* COLONNE : Reste */}
+                          <td className="px-4 py-4 text-right text-sm font-medium whitespace-nowrap">
+                            {remaining > 0 ? (
+                              <span className="text-orange-600">{formatCurrency(remaining)}</span>
+                            ) : (
+                              <span className="text-green-600 font-medium">0</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-4 text-center">
                             <div className="flex items-center justify-center space-x-2">
-                              {/* Signature Coordinateur de la Subvention */}
+                              {/* Signatures */}
                               <div className="relative group">
                                 {getSignatureIcon(payment, 'supervisor1')}
                                 {isSignatureRequired(payment, 'supervisor1') && (
@@ -1411,7 +1859,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                                 </div>
                               </div>
 
-                              {/* Signature Comptable */}
                               <div className="relative group">
                                 {getSignatureIcon(payment, 'supervisor2')}
                                 {isSignatureRequired(payment, 'supervisor2') && (
@@ -1440,7 +1887,6 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                                 </div>
                               </div>
 
-                              {/* Signature Coordonnateur National */}
                               <div className="relative group">
                                 {getSignatureIcon(payment, 'finalApproval')}
                                 {isSignatureRequired(payment, 'finalApproval') && (
@@ -1470,52 +1916,12 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                               </div>
                             </div>
                           </td>
-                          <td className="px-6 py-4 text-center">
-                            {canModifyStatus() ? (
-                              <>
-                                <select
-                                  value={payment.status}
-                                  onChange={(e) => updatePaymentStatus(payment.id, e.target.value as Payment['status'])}
-                                  className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PAYMENT_STATUS[payment.status].color}`}
-                                >
-                                  
-                                  <option value="pending">En attente</option>
-                                  <option value="approved">Approuvé</option>
-                                  <option value="rejected">Rejeté</option>
-                                </select>
-
-                                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PAYMENT_STATUS[payment.status].color}`}>
-                                  {PAYMENT_STATUS[payment.status].label}
-                                </span>
-                              </>
-                            ): canModifyStatusComptable() ? (
-                              <>
-                                {payment.status === 'approved' || payment.status === 'paid' ? (
-                                  <select
-                                    value={payment.status}
-                                    onChange={(e) => updatePaymentStatus(payment.id, e.target.value as Payment['status'])}
-                                    className={`text-xs font-medium rounded-full px-2 py-1 border-0 ${PAYMENT_STATUS[payment.status].color}`}
-                                  >
-                                    <option value="">Selectionnez</option>
-                                    <option value="pending">En attente</option>
-                                    <option value="paid">Payé</option>
-                                    {/* <option value="cashed">Encaissé</option> */}
-                                  </select>
-                                ):''}
-
-                                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PAYMENT_STATUS[payment.status].color}`}>
-                                {PAYMENT_STATUS[payment.status].label}
-                              </span>
-                              </>
-                            ):(
-                              <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${PAYMENT_STATUS[payment.status].color}`}>
-                                {PAYMENT_STATUS[payment.status].label}
-                              </span>
-                            )}
+                          <td className="px-4 py-4 text-center">
+                            {renderStatus(payment)}
                           </td>
-                          <td className="px-6 py-4 text-center">
-                            <div className="flex items-center justify-center space-x-2">
-                              {canEdit && (
+                          <td className="px-4 py-4 text-center">
+                            <div className="flex items-center justify-center space-x-1">
+                              {canEditPayment(payment) && (
                                 <button
                                   onClick={() => onEditPayment(payment.id)}
                                   className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
@@ -1534,47 +1940,16 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                                   <Eye className="w-4 h-4" />
                                 </button>
                               )}
-                              {/* {canEdit && (
-                                <button
-                                  onClick={() => {
-                                    setEditingPayment(payment);
-                                    setFormData({
-                                      engagementId: payment.engagementId,
-                                      grantId: payment.grantId,
-                                      budgetLineId: payment.budgetLineId,
-                                      subBudgetLineId: payment.subBudgetLineId,
-                                      paymentNumber: payment.paymentNumber,
-                                      amount: payment.amount.toString(),
-                                      description: payment.description,
-                                      supplier: payment.supplier || '',
-                                      paymentMethod: payment.paymentMethod,
-                                      checkNumber: payment.checkNumber || '',
-                                      bankAccountId: payment.bankAccountId || '',
-                                      date: payment.date,
-                                      status: payment.status
-                                    });
-                                    if (payment.approvals) {
-                                      setApprovals({
-                                        financialController: payment.approvals.financialController || { name: '', signature: false, observation: '' },
-                                        accountingManager: payment.approvals.accountingManager || { name: '', signature: false, observation: '' },
-                                        nationalCoordinator: payment.approvals.nationalCoordinator || { name: '', signature: false, observation: '' }
-                                      });
-                                    }
-                                    setShowForm(true);
-                                  }}
-                                  className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </button>
-                              )} */}
+
+                              {renderAddPartialPaymentButton(payment)}
                             </div>
                           </td>
                         </tr>
                         
-                        {/* Ligne détaillée expandable */}
+                        {/* Ligne détaillée expandable avec barre de progression */}
                         {isExpanded && (
                           <tr className="bg-blue-50">
-                            <td colSpan={8} className="px-6 py-4">
+                            <td colSpan={10} className="px-4 py-4">
                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                                 <div>
                                   <h4 className="font-semibold text-gray-900 mb-2">Détails de l'engagement</h4>
@@ -1591,8 +1966,45 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                                     <p><span className="font-medium">Description:</span> {payment.description}</p>
                                     <p><span className="font-medium">Mode de paiement:</span> {payment.paymentMethod === 'check' ? 'Chèque' : payment.paymentMethod === 'transfer' ? 'Virement' : 'Espèces'}</p>
                                     {payment.checkNumber && <p><span className="font-medium">N° chèque:</span> {payment.checkNumber}</p>}
-                                    <p><span className="font-medium">Statut:</span> <span className={PAYMENT_STATUS[payment.status].color.replace('bg-', 'text-').replace('-100', '-800')}>{PAYMENT_STATUS[payment.status].label}</span></p>
+                                    <p><span className="font-medium">Montant total:</span> {formatCurrency(payment.amount)}</p>
+                                    <p><span className="font-medium">Payé:</span> {formatCurrency(getTotalPaid(payment))}</p>
+                                    <p><span className="font-medium">Reste:</span> {formatCurrency(getRemainingAmount(payment))}</p>
                                   </div>
+                                  {/* Barre de progression dans les détails */}
+                                  <div className="mt-3">
+                                    <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
+                                      <span>Progression</span>
+                                      <span>{progress.toFixed(0)}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-2.5">
+                                      <div 
+                                        className={`h-2.5 rounded-full transition-all duration-300 ${
+                                          isFullyPaidStatus ? 'bg-green-600' : 
+                                          progress > 0 ? 'bg-blue-600' : 'bg-gray-400'
+                                        }`}
+                                        style={{ width: `${Math.min(progress, 100)}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                  {hasPartials && (
+                                    <div className="mt-3">
+                                      <h4 className="font-semibold text-gray-900 mb-2">Paiements partiels</h4>
+                                      <div className="space-y-2 max-h-32 overflow-y-auto">
+                                        {payment.partialPayments?.map((pp, index) => (
+                                          <div key={index} className="bg-white p-2 rounded border border-gray-200 text-xs">
+                                            <div className="flex justify-between">
+                                              <span className="font-medium">{pp.reference}</span>
+                                              <span className="text-green-600 font-bold">{formatCurrency(pp.amount)}</span>
+                                            </div>
+                                            <div className="flex justify-between text-gray-500">
+                                              <span>{new Date(pp.date).toLocaleDateString('fr-FR')}</span>
+                                              <span>{pp.paymentMethod === 'check' ? 'Chèque' : pp.paymentMethod === 'transfer' ? 'Virement' : 'Espèces'}</span>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </td>
@@ -1605,9 +2017,9 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
               </table>
             </div>
 
-            {/* Pagination intégrée au tableau */}
+            {/* Pagination */}
             {totalPages > 1 && (
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-6 py-4 border-t border-gray-200 gap-4 bg-gray-50">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-4 py-4 border-t border-gray-200 gap-4 bg-gray-50">
                 <div className="text-sm text-gray-700">
                   Affichage de {startIndex + 1} à {Math.min(endIndex, sortedPayments.length)} sur {sortedPayments.length} paiements
                 </div>
@@ -1662,6 +2074,166 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
           </>
         )}
       </div>
+
+
+      {/* Modal - Paiement Partiel */}
+      {showPartialPaymentForm && selectedPaymentForPartial && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Ajouter un paiement partiel</h3>
+                <p className="text-sm text-gray-600">
+                  {selectedPaymentForPartial.paymentNumber} - {selectedPaymentForPartial.supplier}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPartialPaymentForm(false);
+                  setSelectedPaymentForPartial(null);
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddPartialPayment} className="space-y-4">
+              <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Montant total:</span>
+                  <span className="font-bold">{formatCurrency(selectedPaymentForPartial.amount)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Déjà payé:</span>
+                  <span className="font-bold text-green-600">{formatCurrency(getTotalPaid(selectedPaymentForPartial))}</span>
+                </div>
+                <div className="flex justify-between text-sm font-medium border-t pt-2 mt-2">
+                  <span className="text-gray-700">Reste à payer:</span>
+                  <span className="font-bold text-purple-600">{formatCurrency(getRemainingAmount(selectedPaymentForPartial))}</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Montant de ce paiement *
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    max={getRemainingAmount(selectedPaymentForPartial)}
+                    value={partialPaymentData.amount}
+                    onChange={(e) => setPartialPaymentData(prev => ({ ...prev, amount: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    placeholder="0.00"
+                    required
+                  />
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Maximum: {formatCurrency(getRemainingAmount(selectedPaymentForPartial))}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Date du paiement *
+                </label>
+                <input
+                  type="date"
+                  value={partialPaymentData.date}
+                  onChange={(e) => setPartialPaymentData(prev => ({ ...prev, date: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Mode de paiement *
+                </label>
+                <select
+                  value={partialPaymentData.paymentMethod}
+                  onChange={(e) => setPartialPaymentData(prev => ({ 
+                    ...prev, 
+                    paymentMethod: e.target.value as 'transfer' | 'check' | 'cash' 
+                  }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  required
+                >
+                  <option value="transfer">Virement bancaire</option>
+                  <option value="check">Chèque</option>
+                  <option value="cash">Espèces</option>
+                </select>
+              </div>
+
+              {partialPaymentData.paymentMethod === 'check' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Numéro de chèque
+                  </label>
+                  <input
+                    type="text"
+                    value={partialPaymentData.checkNumber}
+                    onChange={(e) => setPartialPaymentData(prev => ({ ...prev, checkNumber: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    placeholder="N° de chèque"
+                  />
+                </div>
+              )}
+
+              {partialPaymentData.paymentMethod === 'transfer' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Référence virement
+                  </label>
+                  <input
+                    type="text"
+                    value={partialPaymentData.bankReference}
+                    onChange={(e) => setPartialPaymentData(prev => ({ ...prev, bankReference: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    placeholder="Référence du virement"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Référence du paiement partiel *
+                </label>
+                <input
+                  type="text"
+                  value={partialPaymentData.reference}
+                  onChange={(e) => setPartialPaymentData(prev => ({ ...prev, reference: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                  placeholder="Ex: PART-2024-001"
+                  required
+                />
+              </div>
+
+              <div className="flex space-x-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowPartialPaymentForm(false);
+                    setSelectedPaymentForPartial(null);
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-blue-600 text-white rounded-lg font-medium hover:shadow-lg transition-all duration-200"
+                >
+                  Ajouter le paiement
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

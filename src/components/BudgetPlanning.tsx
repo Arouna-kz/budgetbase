@@ -4,6 +4,8 @@ import { showSuccess, showError, showValidationError, confirmDelete, showWarning
 import { BudgetLine, SubBudgetLine, Grant } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
 import jsPDF from 'jspdf';
+import * as XLSX from 'xlsx-js-style';
+import { EXCEL_STYLES, dataCellStyle, EXCEL_COLORS } from '../utils/excelExport';
 
 // Interface des propriétés du composant
 interface BudgetPlanningProps {
@@ -685,6 +687,128 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
       }
     };
 
+    // 🎯 EXPORT EXCEL COLORÉ DE LA LISTE DE PLANIFICATION
+    const exportToExcel = () => {
+      if (!canExport) {
+        showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+        return;
+      }
+      try {
+        const COLS = 5;
+        const currency = selectedGrant?.currency || 'EUR';
+        const fmt = (amount: number) =>
+          `${formatCurrencyForPDF(amount, currency)} ${getCurrencySymbolForPDF(currency)}`;
+
+        const totalPlanned = filteredBudgetLines.reduce((sum, line) => sum + line.plannedAmount, 0);
+        const totalNotified = filteredBudgetLines.reduce((sum, line) => sum + line.notifiedAmount, 0);
+        const overallRate = totalPlanned > 0 ? (totalNotified / totalPlanned) * 100 : 0;
+
+        const rows: any[] = [];
+        const rowTypes: string[] = [];
+        const pushRow = (row: any[], type: string) => {
+          const padded = [...row];
+          while (padded.length < COLS) padded.push('');
+          rows.push(padded);
+          rowTypes.push(type);
+        };
+
+        pushRow(['PLANIFICATION BUDGÉTAIRE'], 'title');
+        if (selectedGrant) {
+          pushRow([`Subvention : ${selectedGrant.name}`], 'info');
+          pushRow([`Référence : ${selectedGrant.reference}   •   Devise : ${selectedGrant.currency}`], 'info');
+        }
+        pushRow([`Généré le : ${new Date().toLocaleDateString('fr-FR')}`], 'info');
+        pushRow([''], 'empty');
+        pushRow(['Code', 'Lignes et Sous-lignes', 'Budget Planifié', 'Budget Notifié', 'Taux'], 'header');
+
+        filteredBudgetLines.forEach((budgetLine) => {
+          const rate = getNotificationRate(budgetLine.plannedAmount, budgetLine.notifiedAmount);
+          pushRow([
+            budgetLine.code,
+            budgetLine.name,
+            fmt(budgetLine.plannedAmount),
+            fmt(budgetLine.notifiedAmount),
+            `${rate.toFixed(1)}%`
+          ], 'line');
+
+          const subs = filteredSubBudgetLines.filter(sub => sub.budgetLineId === budgetLine.id);
+          subs.forEach((subLine) => {
+            const subRate = getNotificationRate(subLine.plannedAmount, subLine.notifiedAmount);
+            pushRow([
+              `   ${subLine.code}`,
+              `   ${subLine.name}`,
+              fmt(subLine.plannedAmount),
+              fmt(subLine.notifiedAmount),
+              `${subRate.toFixed(1)}%`
+            ], 'subline');
+          });
+        });
+
+        pushRow([
+          'TOTAUX',
+          '',
+          fmt(totalPlanned),
+          fmt(totalNotified),
+          `${overallRate.toFixed(1)}%`
+        ], 'total');
+
+        const ws = XLSX.utils.aoa_to_sheet(rows);
+        ws['!cols'] = [{ wch: 18 }, { wch: 55 }, { wch: 22 }, { wch: 22 }, { wch: 12 }];
+
+        // Fusions titre + info
+        const merges: XLSX.Range[] = [];
+        rowTypes.forEach((type, r) => {
+          if (type === 'title' || type === 'info') {
+            merges.push({ s: { r, c: 0 }, e: { r, c: COLS - 1 } });
+          }
+        });
+        ws['!merges'] = merges;
+
+        const amountCols = new Set([2, 3, 4]);
+        const subLineStyle = (c: number) => ({
+          font: { sz: 9, italic: true, color: { rgb: EXCEL_COLORS.infoText } },
+          fill: { fgColor: { rgb: EXCEL_COLORS.subRow } },
+          alignment: { horizontal: amountCols.has(c) ? 'right' : 'left', vertical: 'center', wrapText: true },
+          border: {
+            top: { style: 'thin', color: { rgb: EXCEL_COLORS.border } },
+            bottom: { style: 'thin', color: { rgb: EXCEL_COLORS.border } },
+            left: { style: 'thin', color: { rgb: EXCEL_COLORS.border } },
+            right: { style: 'thin', color: { rgb: EXCEL_COLORS.border } },
+          },
+        });
+
+        for (let r = 0; r < rows.length; r++) {
+          const type = rowTypes[r];
+          for (let c = 0; c < COLS; c++) {
+            const ref = XLSX.utils.encode_cell({ r, c });
+            if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+            const align = amountCols.has(c) ? 'right' : 'left';
+            switch (type) {
+              case 'title': ws[ref].s = EXCEL_STYLES.title; break;
+              case 'info': ws[ref].s = EXCEL_STYLES.info; break;
+              case 'header': ws[ref].s = EXCEL_STYLES.header; break;
+              case 'line': ws[ref].s = { ...dataCellStyle(0, align), font: { bold: c === 0, sz: 10, color: { rgb: EXCEL_COLORS.text } } }; break;
+              case 'subline': ws[ref].s = subLineStyle(c); break;
+              case 'total': ws[ref].s = { ...EXCEL_STYLES.total, alignment: { horizontal: align, vertical: 'center' } }; break;
+              default: break;
+            }
+          }
+        }
+
+        const rowsMeta: XLSX.RowInfo[] = [];
+        rowsMeta[0] = { hpt: 26 };
+        ws['!rows'] = rowsMeta;
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Planification');
+        XLSX.writeFile(wb, `planification_budget_${new Date().toISOString().split('T')[0]}.xlsx`);
+        showSuccess('Export réussi', 'Le fichier Excel a été généré avec succès');
+      } catch (error) {
+        console.error('Erreur lors de la génération du fichier Excel:', error);
+        showError('Erreur', 'Une erreur est survenue lors de la génération du fichier Excel');
+      }
+    };
+
     // Réinitialisation des formulaires
     const resetBudgetLineForm = () => {
       setBudgetLineFormData({
@@ -1037,10 +1161,16 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                     {canExport && (
+                        <>
                          <button onClick={exportToPDF} className="bg-red-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-red-700 flex items-center space-x-2">
                             <Download className="w-4 h-4" />
                             <span>Exporter PDF</span>
                         </button>
+                         <button onClick={exportToExcel} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-emerald-700 flex items-center space-x-2">
+                            <Download className="w-4 h-4" />
+                            <span>Exporter Excel</span>
+                        </button>
+                        </>
                     )}
                     {canCreate && (
                         <>

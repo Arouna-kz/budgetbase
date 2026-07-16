@@ -1735,7 +1735,9 @@ const handleDeleteRole = async (role: UserRole) => {
                                     className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                     disabled={!permission.selectedActions.length && !permission.selectedActions.includes(action)}
                                   />
-                                  <span className="text-gray-600">{action}</span>
+                                  <span className="text-gray-600">
+                                    {(({ view: 'Voir', create: 'Créer', edit: 'Modifier', delete: 'Supprimer', sign: 'Signer', approve: 'Approuver', validate: 'Valider', export: 'Exporter' } as Record<string, string>)[action]) || action}
+                                  </span>
                                 </label>
                               ))}
                             </div>

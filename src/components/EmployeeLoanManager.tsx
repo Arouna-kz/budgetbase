@@ -6,6 +6,7 @@ import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../hooks/useAuth';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import { exportStyledExcel } from '../utils/excelExport';
 import { useEmployeeLoanNotifications } from '../hooks/useEmployeeLoanNotifications';
 
 interface EmployeeLoanManagerProps {
@@ -53,6 +54,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [showOnlyToSign, setShowOnlyToSign] = useState(false);
 
   // État pour gérer l'expansion du contenu des cellules
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -162,22 +164,29 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   };
 
   // Récupère les prêts en attente de signature pour l'utilisateur actuel
-  const getPendingSignatures = (): EmployeeLoan[] => {
+  // Le prêt nécessite-t-il la signature de l'utilisateur courant ?
+  const needsUserSignature = (loan: EmployeeLoan): boolean => {
     const userProfession = getUserProfession();
-    
-    return loans.filter(loan => {
-      if (userProfession === 'Coordinateur de la Subvention') {
-        return !loan.approvals?.supervisor1?.signature;
-      } else if (userProfession === 'Comptable') {
-        return !loan.approvals?.supervisor2?.signature;
-      } else if (userProfession === 'Coordonnateur National') {
-        const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
-        const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
-        const hasFinalSigned = loan.approvals?.finalApproval?.signature;
-        return hasSupervisor1Signed && hasSupervisor2Signed && !hasFinalSigned;
-      }
-      return false;
-    });
+    if (userProfession === 'Coordinateur de la Subvention') {
+      return !loan.approvals?.supervisor1?.signature;
+    } else if (userProfession === 'Comptable') {
+      return !loan.approvals?.supervisor2?.signature;
+    } else if (userProfession === 'Coordonnateur National') {
+      const hasSupervisor1Signed = loan.approvals?.supervisor1?.signature;
+      const hasSupervisor2Signed = loan.approvals?.supervisor2?.signature;
+      const hasFinalSigned = loan.approvals?.finalApproval?.signature;
+      // Le coordonnateur (signataire final) doit signer ET décider (approuver/rejeter).
+      // L'élément reste dans la liste "À signer" tant qu'il n'a pas fait les DEUX :
+      // il n'en disparaît qu'une fois signé ET son statut décidé (≠ 'pending'),
+      // pour lui éviter d'avoir à rechercher l'élément plus tard pour changer le statut.
+      const hasDecision = loan.status !== 'pending';
+      return !!(hasSupervisor1Signed && hasSupervisor2Signed && !(hasFinalSigned && hasDecision));
+    }
+    return false;
+  };
+
+  const getPendingSignatures = (): EmployeeLoan[] => {
+    return loans.filter(loan => needsUserSignature(loan));
   };
 
   // Fonction pour ouvrir le modal de détails
@@ -226,6 +235,9 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   const userProfession = getUserProfession();
   const userFullName = getUserFullName();
   const pendingSignatures = getPendingSignatures();
+  // ✅ Nombre de prêts en attente de MA signature (accès rapide)
+  // ✅ Un prêt reste "à signer" tant que l'utilisateur ne l'a pas signé, quel que soit le statut.
+  const toSignCount = loans.filter(l => needsUserSignature(l)).length;
 
   // Définir selectedGrant basé sur selectedGrantId ou la subvention la plus récente
   const selectedGrant = selectedGrantId 
@@ -756,7 +768,11 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
 
     const matchesStatus = statusFilter === 'all' || loan.status === statusFilter;
 
-    return matchesSearch && matchesStatus;
+    // ✅ Filtre "À signer" : uniquement les prêts en attente nécessitant ma signature
+    // L'élément reste dans la liste "À signer" tant que ma signature est requise, quel que soit le statut.
+    const matchesToSign = !showOnlyToSign || needsUserSignature(loan);
+
+    return matchesSearch && matchesStatus && matchesToSign;
   });
 
   // Tri des prêts
@@ -843,7 +859,9 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
   };
 
   const handleEditLoan = (loan: EmployeeLoan) => {
-    if (!canEdit) {
+    // Un signataire qui n'a pas encore signé peut toujours ouvrir le formulaire pour signer,
+    // même sans permission de modification et quel que soit le statut du prêt.
+    if (!canEdit && !needsUserSignature(loan)) {
       showWarning('Permission refusée', 'Vous n\'avez pas la permission de modifier les prêts');
       return;
     }
@@ -1150,6 +1168,88 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
     }
   };
 
+  // 🎯 EXPORT EXCEL COLORÉ DE LA LISTE DES PRÊTS
+  const exportListToExcel = () => {
+    if (!canView) {
+      showValidationError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+      return;
+    }
+    if (sortedLoans.length === 0) {
+      showWarning('Aucune donnée', 'Aucun prêt à exporter');
+      return;
+    }
+
+    try {
+      const grant = grants.find(g => g.status === 'active') || grants[0];
+
+      const infoLines: string[] = [];
+      if (grant) {
+        infoLines.push(`Subvention : ${grant.name}`);
+        infoLines.push(`Référence : ${grant.reference}   •   Devise : ${grant.currency}`);
+      }
+      infoLines.push(`Généré le : ${new Date().toLocaleDateString('fr-FR')}`);
+
+      const dataRows = sortedLoans.map((loan) => {
+        const budgetLine = getBudgetLine(loan.budgetLineId || '');
+        const totalRepaid = getTotalRepaid(loan);
+        const remaining = getRemainingAmount(loan);
+        const progress = getRepaymentProgress(loan);
+        return [
+          loan.loanNumber,
+          loan.employee?.name || '-',
+          loan.employee?.employeeId || '-',
+          new Date(loan.date).toLocaleDateString('fr-FR'),
+          budgetLine ? `${budgetLine.code} - ${budgetLine.name}` : '-',
+          formatCurrency(loan.amount, loan.grantId),
+          formatCurrency(totalRepaid, loan.grantId),
+          formatCurrency(remaining, loan.grantId),
+          `${progress.toFixed(1)}%`,
+          loan.expectedRepaymentDate ? new Date(loan.expectedRepaymentDate).toLocaleDateString('fr-FR') : '-',
+          LOAN_STATUS[loan.status]?.label || loan.status,
+        ];
+      });
+
+      const totalAmount = sortedLoans.reduce((sum, l) => sum + l.amount, 0);
+      const totalRepaidAll = sortedLoans.reduce((sum, l) => sum + getTotalRepaid(l), 0);
+      const totalRemainingAll = sortedLoans.reduce((sum, l) => sum + getRemainingAmount(l), 0);
+
+      const totalsRow = [
+        'TOTAUX', '', '', '', '',
+        formatCurrency(totalAmount, grant?.id),
+        formatCurrency(totalRepaidAll, grant?.id),
+        formatCurrency(totalRemainingAll, grant?.id),
+        '', '', ''
+      ];
+
+      exportStyledExcel({
+        fileName: `prets-employes-${grant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.xlsx`,
+        sheetName: 'Prêts employés',
+        title: 'LISTE DES PRÊTS AUX EMPLOYÉS',
+        infoLines,
+        columns: [
+          { header: 'N° Prêt', width: 18 },
+          { header: 'Employé', width: 24 },
+          { header: 'Matricule', width: 15 },
+          { header: 'Date', width: 13, align: 'center' },
+          { header: 'Ligne budgétaire', width: 32 },
+          { header: 'Montant', width: 18, align: 'right' },
+          { header: 'Remboursé', width: 18, align: 'right' },
+          { header: 'Reste', width: 18, align: 'right' },
+          { header: 'Progression', width: 12, align: 'center' },
+          { header: 'Remb. prévu', width: 14, align: 'center' },
+          { header: 'Statut', width: 14, align: 'center' },
+        ],
+        rows: dataRows,
+        totalsRow,
+      });
+
+      showSuccess('Export réussi', 'Le fichier Excel a été généré avec succès');
+    } catch (error) {
+      console.error('Erreur lors de l\'export Excel:', error);
+      showValidationError('Erreur', 'Impossible de générer le fichier Excel');
+    }
+  };
+
   // 🚨 VÉRIFICATIONS DE CHARGEMENT ET PERMISSIONS
   if (permissionsLoading) {
     return (
@@ -1183,18 +1283,36 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
           <p className="text-gray-600 mt-1">Prêts sur compte bancaire et suivi des remboursements</p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          {/* Notification des signatures en attente */}
-          {pendingSignatures.length > 0 && (
-            <div className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-2">
-              <div className="flex items-center space-x-2">
-                <AlertCircle className="w-4 h-4 text-orange-600" />
-                <span className="text-sm font-medium text-orange-800">
-                  {pendingSignatures.length} signature(s) en attente
-                </span>
-              </div>
-            </div>
+          {/* Accès rapide aux prêts à signer */}
+          {canViewSignatureSection() && (
+            <button
+              type="button"
+              onClick={() => setShowOnlyToSign(prev => !prev)}
+              className={`rounded-lg px-4 py-2 border transition-colors flex items-center space-x-2 ${
+                showOnlyToSign
+                  ? 'bg-orange-600 border-orange-600 text-white'
+                  : 'bg-orange-50 border-orange-200 text-orange-800 hover:bg-orange-100'
+              }`}
+              title="Afficher uniquement les prêts qui me restent à signer"
+            >
+              <AlertCircle className="w-4 h-4" />
+              <span className="text-sm font-medium">
+                {showOnlyToSign ? 'Tout afficher' : `À signer (${toSignCount})`}
+              </span>
+            </button>
           )}
           
+          {canView && (
+            <button
+              onClick={exportListToExcel}
+              className="px-4 py-2 rounded-xl font-medium transition-colors flex items-center space-x-2 bg-emerald-600 text-white hover:bg-emerald-700"
+              title="Exporter la liste des prêts en Excel"
+            >
+              <Download className="w-4 h-4" />
+              <span>Exporter Excel</span>
+            </button>
+          )}
+
           {canCreate && (
             <button
               onClick={() => setShowForm(true)}
@@ -1245,11 +1363,12 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex items-center space-x-4 text-sm text-gray-600">
             <span>{sortedLoans.length} prêt(s) trouvé(s)</span>
-            {(searchTerm || statusFilter !== 'all') && (
+            {(searchTerm || statusFilter !== 'all' || showOnlyToSign) && (
               <button
                 onClick={() => {
                   setSearchTerm('');
                   setStatusFilter('all');
+                  setShowOnlyToSign(false);
                 }}
                 className="text-blue-600 hover:text-blue-800 text-sm font-medium"
               >
@@ -1595,7 +1714,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                       value={formData.date}
                       onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={!editingLoan}
                     />
                   </div>
 
@@ -1608,7 +1727,7 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                       value={formData.expectedRepaymentDate}
                       onChange={(e) => setFormData(prev => ({ ...prev, expectedRepaymentDate: e.target.value }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={!editingLoan}
                     />
                   </div>
                 </div>
@@ -2610,11 +2729,11 @@ const EmployeeLoanManager: React.FC<EmployeeLoanManagerProps> = ({
                                   <Plus className="w-4 h-4" />
                                 </button>
                               )}
-                              {canEdit && (
-                                <button 
+                              {(canEdit || needsUserSignature(loan)) && (
+                                <button
                                   onClick={() => handleEditLoan(loan)}
                                   className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                  title="Modifier le prêt"
+                                  title={canEdit ? 'Modifier le prêt' : 'Signer'}
                                 >
                                   <Edit className="w-4 h-4" />
                                 </button>

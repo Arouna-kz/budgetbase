@@ -10,13 +10,10 @@ const defaultConfig = {
     cancelButton: 'bg-gray-100 text-gray-700 px-6 py-3 rounded-xl font-medium hover:bg-gray-200 transition-colors',
     denyButton: 'bg-red-600 text-white px-6 py-3 rounded-xl font-medium hover:bg-red-700 transition-colors'
   },
-  buttonsStyling: false,
-  showClass: {
-    popup: 'animate__animated animate__fadeInDown animate__faster'
-  },
-  hideClass: {
-    popup: 'animate__animated animate__fadeOutUp animate__faster'
-  }
+  buttonsStyling: false
+  // NB : pas de showClass/hideClass personnalisés basés sur animate.css (non installé).
+  // Sinon SweetAlert2 attend un « animationend » qui n'arrive jamais et le popup reste figé.
+  // On laisse donc les animations intégrées de SweetAlert2 (fermeture fiable sur timer/clic).
 };
 
 // Messages de succès

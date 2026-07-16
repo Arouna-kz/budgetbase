@@ -8,7 +8,8 @@ import {
   BankAccount, 
   BankTransaction, 
   Prefinancing, 
-  EmployeeLoan 
+  EmployeeLoan,
+  PartialPayment
 } from '../types';
 import { User, UserRole } from '../types/user';
 
@@ -491,7 +492,10 @@ export const paymentsService = {
         controlNotes: payment.control_notes,
         status: payment.status as Payment['status'],
         cashedDate: payment.cashed_date,
-        approvals: payment.approvals as Payment['approvals']
+        approvals: payment.approvals as Payment['approvals'],
+        partialPayments: payment.partial_payments || [],        // <-- ajout
+        remainingAmount: payment.remaining_amount || 0          // <-- ajout
+
       }));
     } catch (error) {
       handleSupabaseError(error);
@@ -611,6 +615,62 @@ export const paymentsService = {
     } catch (error) {
       handleSupabaseError(error);
     }
+  },
+
+   // Nouvelle fonction pour créer un paiement partiel
+  async addPartialPayment(paymentId: string, partialPayment: Omit<PartialPayment, 'id'>): Promise<Payment> {
+    // 1. Récupérer le paiement
+    const { data: existing, error: fetchError } = await supabase
+      .from('payments')
+      .select('*')
+      .eq('id', paymentId)
+      .single();
+    if (fetchError) throw fetchError;
+
+    // existing contient bien `partial_payments` (colonne de la table), mais TS ne le sait pas
+    const currentPartialPayments = (existing as any).partial_payments || [];
+    const newPartialPayment = {
+      ...partialPayment,
+      id: `pp-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    };
+    const updatedPartialPayments = [...currentPartialPayments, newPartialPayment];
+
+    const totalPaid = updatedPartialPayments.reduce((sum, pp) => sum + pp.amount, 0);
+    const remaining = existing.amount - totalPaid;
+    let newStatus = existing.status;
+    if (remaining <= 0) newStatus = 'paid';
+    else if (totalPaid > 0) newStatus = 'in_progress';
+
+    // 2. Mettre à jour la base
+    const { data, error } = await supabase
+      .from('payments')
+      .update({
+        partial_payments: updatedPartialPayments,
+        status: newStatus,
+      })
+      .eq('id', paymentId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // 3. Retourner l'objet avec partialPayments (camelCase) pour la partie frontend
+    return { ...data, partialPayments: data.partial_payments || [] };
+  },
+
+  // Nouvelle fonction pour obtenir le montant restant
+  async getRemainingAmount(paymentId: string): Promise<number> {
+    const { data, error } = await supabase
+      .from('payments')
+      .select('amount, partial_payments')   // ← ici
+      .eq('id', paymentId)
+      .single();
+
+    if (error) throw error;
+
+    const partialPayments = data.partial_payments || [];
+    const totalPaid = partialPayments.reduce((sum: number, pp: any) => sum + pp.amount, 0);
+    return data.amount - totalPaid;
   }
 };
 

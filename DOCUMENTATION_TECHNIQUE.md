@@ -1,4 +1,4 @@
-# Documentation Technique - BudgetFlow
+# Documentation Technique - BudgetBase
 ## Plateforme de Gestion Budgétaire
 
 ### Version 1.0 - Architecture et Implémentation
@@ -24,7 +24,7 @@
 
 ### Vue d'Ensemble
 
-BudgetFlow est une application web moderne construite selon une architecture client-serveur avec les caractéristiques suivantes :
+BudgetBase est une application web moderne construite selon une architecture client-serveur avec les caractéristiques suivantes :
 
 - **Frontend** : Application React TypeScript avec Vite
 - **Backend** : Supabase (PostgreSQL + API REST automatique)
@@ -115,124 +115,383 @@ employee_loans (prêts employés)
 app_settings (paramètres application)
 ```
 
+=========================================DEBUT PRECONFIGURATION==============================================
+
+======================================================================================
 ### Tables Principales
+======================================================================================
 
-#### 1. Subventions (grants)
+### Script SQL de Création
 
-```sql
-CREATE TABLE grants (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  name TEXT NOT NULL,
-  reference TEXT UNIQUE NOT NULL,
-  granting_organization TEXT NOT NULL,
-  year INTEGER NOT NULL,
-  currency TEXT NOT NULL CHECK (currency IN ('EUR', 'USD', 'XOF')),
-  planned_amount DECIMAL(15,2) DEFAULT 0,
-  total_amount DECIMAL(15,2) NOT NULL,
-  start_date DATE,
-  end_date DATE,
-  status TEXT NOT NULL DEFAULT 'pending' 
-    CHECK (status IN ('pending', 'active', 'completed', 'suspended')),
-  description TEXT,
-  bank_account JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+Vous pouvez exécuter ce script directement dans l'éditeur SQL de votre tableau de bord Supabase.
+
+-- ============================================================
+-- SCRIPT DE CRÉATION DES TABLES - VERSION V2
+-- (Sans bank_accounts, avec bank_transactions liées aux grants)
+-- ============================================================
+
+-- 1. Activation de l'extension pour les UUIDs
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- ============================================================
+-- 2. TABLE: app_settings (Indépendante)
+-- ============================================================
+CREATE TABLE public.app_settings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    key TEXT NOT NULL UNIQUE,
+    value JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-```
 
-#### 2. Lignes Budgétaires (budget_lines)
-
-```sql
-CREATE TABLE budget_lines (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  grant_id UUID NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
-  code TEXT NOT NULL,
-  name TEXT NOT NULL,
-  planned_amount DECIMAL(15,2) DEFAULT 0,
-  notified_amount DECIMAL(15,2) DEFAULT 0,
-  engaged_amount DECIMAL(15,2) DEFAULT 0,
-  available_amount DECIMAL(15,2) DEFAULT 0,
-  description TEXT,
-  color TEXT DEFAULT 'bg-blue-100 text-blue-700',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================
+-- 3. TABLE: user_roles (Indépendante)
+-- ============================================================
+CREATE TABLE public.user_roles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    code TEXT NOT NULL UNIQUE,
+    description TEXT NOT NULL,
+    permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+    color TEXT NOT NULL,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-```
 
-#### 3. Sous-lignes Budgétaires (sub_budget_lines)
-
-```sql
-CREATE TABLE sub_budget_lines (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  grant_id UUID NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
-  budget_line_id UUID NOT NULL REFERENCES budget_lines(id) ON DELETE CASCADE,
-  code TEXT NOT NULL,
-  name TEXT NOT NULL,
-  planned_amount DECIMAL(15,2) DEFAULT 0,
-  notified_amount DECIMAL(15,2) DEFAULT 0,
-  engaged_amount DECIMAL(15,2) DEFAULT 0,
-  available_amount DECIMAL(15,2) DEFAULT 0,
-  description TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================
+-- 4. TABLE: users (Dépend de user_roles)
+-- ============================================================
+CREATE TABLE public.users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT NOT NULL UNIQUE,
+    first_name TEXT NOT NULL,
+    last_name TEXT NOT NULL,
+    profession TEXT,
+    employee_id TEXT,
+    role_id UUID NOT NULL REFERENCES public.user_roles(id),
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    last_login TIMESTAMPTZ,
+    created_by TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-```
 
-#### 4. Engagements (engagements)
-
-```sql
-CREATE TABLE engagements (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  grant_id UUID NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
-  budget_line_id UUID NOT NULL REFERENCES budget_lines(id) ON DELETE CASCADE,
-  sub_budget_line_id UUID NOT NULL REFERENCES sub_budget_lines(id) ON DELETE CASCADE,
-  engagement_number TEXT UNIQUE NOT NULL,
-  amount DECIMAL(15,2) NOT NULL,
-  description TEXT NOT NULL,
-  supplier TEXT,
-  quote_reference TEXT,
-  invoice_number TEXT,
-  date DATE NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'approved', 'paid', 'rejected')),
-  approvals JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================
+-- 5. TABLE: grants (Indépendante, contient les infos bancaires en JSON)
+-- ============================================================
+CREATE TABLE public.grants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    granting_organization TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    currency TEXT NOT NULL,
+    planned_amount NUMERIC,
+    total_amount NUMERIC NOT NULL,
+    start_date TIMESTAMPTZ NOT NULL,
+    end_date TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL,
+    description TEXT,
+    bank_account JSONB, -- Stocke les infos bancaires directement dans le grant
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-```
 
-#### 5. Paiements (payments)
-
-```sql
-CREATE TABLE payments (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  payment_number TEXT UNIQUE NOT NULL,
-  grant_id UUID NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
-  budget_line_id UUID NOT NULL REFERENCES budget_lines(id) ON DELETE CASCADE,
-  sub_budget_line_id UUID NOT NULL REFERENCES sub_budget_lines(id) ON DELETE CASCADE,
-  engagement_id UUID NOT NULL REFERENCES engagements(id) ON DELETE CASCADE,
-  amount DECIMAL(15,2) NOT NULL,
-  date DATE NOT NULL,
-  supplier TEXT NOT NULL,
-  description TEXT NOT NULL,
-  payment_method TEXT NOT NULL CHECK (payment_method IN ('check', 'transfer', 'cash')),
-  check_number TEXT,
-  bank_reference TEXT,
-  invoice_number TEXT NOT NULL,
-  invoice_amount DECIMAL(15,2) NOT NULL,
-  quote_reference TEXT,
-  delivery_note TEXT,
-  purchase_order_number TEXT,
-  service_acceptance BOOLEAN DEFAULT FALSE,
-  control_notes TEXT,
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'approved', 'paid', 'cashed', 'rejected')),
-  cashed_date DATE,
-  approvals JSONB,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+-- ============================================================
+-- 6. TABLE: bank_transactions (LIÉE DIRECTEMENT AUX GRANTS)
+-- ============================================================
+CREATE TABLE public.bank_transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    grant_id UUID NOT NULL REFERENCES public.grants(id) ON DELETE CASCADE,
+    date TIMESTAMPTZ NOT NULL,
+    description TEXT NOT NULL,
+    amount NUMERIC NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('credit', 'debit')),
+    reference TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-```
+
+-- ============================================================
+-- 7. TABLE: budget_lines (Dépend de grants)
+-- ============================================================
+CREATE TABLE public.budget_lines (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    grant_id UUID NOT NULL REFERENCES public.grants(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    planned_amount NUMERIC NOT NULL DEFAULT 0,
+    notified_amount NUMERIC NOT NULL DEFAULT 0,
+    engaged_amount NUMERIC NOT NULL DEFAULT 0,
+    available_amount NUMERIC NOT NULL DEFAULT 0,
+    description TEXT,
+    color TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- 8. TABLE: sub_budget_lines (Dépend de budget_lines et grants)
+-- ============================================================
+CREATE TABLE public.sub_budget_lines (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    grant_id UUID NOT NULL REFERENCES public.grants(id),
+    budget_line_id UUID NOT NULL REFERENCES public.budget_lines(id) ON DELETE CASCADE,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    planned_amount NUMERIC NOT NULL DEFAULT 0,
+    notified_amount NUMERIC NOT NULL DEFAULT 0,
+    engaged_amount NUMERIC NOT NULL DEFAULT 0,
+    available_amount NUMERIC NOT NULL DEFAULT 0,
+    description TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- 9. TABLE: engagements (Dépend de sub_budget_lines, budget_lines, grants)
+-- ============================================================
+CREATE TABLE public.engagements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    grant_id UUID NOT NULL REFERENCES public.grants(id),
+    budget_line_id UUID NOT NULL REFERENCES public.budget_lines(id),
+    sub_budget_line_id UUID NOT NULL REFERENCES public.sub_budget_lines(id),
+    engagement_number TEXT NOT NULL,
+    amount NUMERIC NOT NULL DEFAULT 0,
+    description TEXT NOT NULL,
+    supplier TEXT,
+    quote_reference TEXT,
+    invoice_number TEXT,
+    date TIMESTAMPTZ NOT NULL,
+    status TEXT NOT NULL,
+    approvals JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- 10. TABLE: payments (Dépend de engagements et autres)
+-- ============================================================
+CREATE TABLE public.payments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    payment_number TEXT NOT NULL,
+    grant_id UUID NOT NULL REFERENCES public.grants(id),
+    budget_line_id UUID NOT NULL REFERENCES public.budget_lines(id),
+    sub_budget_line_id UUID NOT NULL REFERENCES public.sub_budget_lines(id),
+    engagement_id UUID NOT NULL REFERENCES public.engagements(id),
+    amount NUMERIC NOT NULL DEFAULT 0,
+    date TIMESTAMPTZ NOT NULL,
+    supplier TEXT NOT NULL,
+    description TEXT NOT NULL,
+    payment_method TEXT NOT NULL,
+    check_number TEXT,
+    bank_reference TEXT,
+    invoice_number TEXT NOT NULL,
+    invoice_amount NUMERIC NOT NULL DEFAULT 0,
+    quote_reference TEXT,
+    delivery_note TEXT,
+    purchase_order_number TEXT,
+    service_acceptance BOOLEAN NOT NULL DEFAULT false,
+    control_notes TEXT,
+    status TEXT NOT NULL,
+    cashed_date TIMESTAMPTZ,
+    approvals JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- 11. TABLE: prefinancings (Dépend de grants)
+-- ============================================================
+CREATE TABLE public.prefinancings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    prefinancing_number TEXT NOT NULL,
+    grant_id UUID NOT NULL REFERENCES public.grants(id),
+    budget_line_id UUID REFERENCES public.budget_lines(id),
+    sub_budget_line_id UUID REFERENCES public.sub_budget_lines(id),
+    amount NUMERIC NOT NULL DEFAULT 0,
+    date TIMESTAMPTZ NOT NULL,
+    expected_repayment_date TIMESTAMPTZ NOT NULL,
+    purpose TEXT NOT NULL,
+    target_bank_account TEXT,
+    target_grant TEXT,
+    expenses JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL,
+    repayments JSONB,
+    description TEXT NOT NULL,
+    approvals JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- 12. TABLE: employee_loans (Dépend de grants)
+-- ============================================================
+CREATE TABLE public.employee_loans (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    loan_number TEXT NOT NULL,
+    grant_id UUID NOT NULL REFERENCES public.grants(id),
+    budget_line_id UUID REFERENCES public.budget_lines(id),
+    sub_budget_line_id UUID REFERENCES public.sub_budget_lines(id),
+    employee JSONB NOT NULL,
+    amount NUMERIC NOT NULL DEFAULT 0,
+    date TIMESTAMPTZ NOT NULL,
+    expected_repayment_date TIMESTAMPTZ NOT NULL,
+    description TEXT NOT NULL,
+    repayment_schedule JSONB NOT NULL DEFAULT '[]'::jsonb,
+    repayments JSONB NOT NULL DEFAULT '[]'::jsonb,
+    status TEXT NOT NULL,
+    approvals JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================
+-- INDEX POUR OPTIMISER LES PERFORMANCES
+-- ============================================================
+
+-- Index pour bank_transactions
+CREATE INDEX idx_bank_transactions_grant_id ON public.bank_transactions(grant_id);
+CREATE INDEX idx_bank_transactions_date ON public.bank_transactions(date);
+
+-- Index pour budget_lines
+CREATE INDEX idx_budget_lines_grant_id ON public.budget_lines(grant_id);
+
+-- Index pour sub_budget_lines
+CREATE INDEX idx_sub_budget_lines_grant_id ON public.sub_budget_lines(grant_id);
+CREATE INDEX idx_sub_budget_lines_budget_line_id ON public.sub_budget_lines(budget_line_id);
+
+-- Index pour engagements
+CREATE INDEX idx_engagements_grant_id ON public.engagements(grant_id);
+CREATE INDEX idx_engagements_budget_line_id ON public.engagements(budget_line_id);
+CREATE INDEX idx_engagements_sub_budget_line_id ON public.engagements(sub_budget_line_id);
+
+-- Index pour payments
+CREATE INDEX idx_payments_grant_id ON public.payments(grant_id);
+CREATE INDEX idx_payments_engagement_id ON public.payments(engagement_id);
+
+-- Index pour prefinancings
+CREATE INDEX idx_prefinancings_grant_id ON public.prefinancings(grant_id);
+
+-- Index pour employee_loans
+CREATE INDEX idx_employee_loans_grant_id ON public.employee_loans(grant_id);
+
+-- Index pour users
+CREATE INDEX idx_users_role_id ON public.users(role_id);
+CREATE INDEX idx_users_email ON public.users(email);
+
+=======================================================================
+Script RLS et Triggers (Juste après l'exécution de la commande qui suit celle de la création des tables)
+=======================================================================
+
+-- ============================================================
+-- 1. CRÉATION DE LA FONCTION DE MISE À JOUR
+-- ============================================================
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+   NEW.updated_at = now();
+   RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- ============================================================
+-- 2. APPLICATION RLS + TRIGGER POUR CHAQUE TABLE
+-- ============================================================
+
+-- Table: app_settings
+ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.app_settings FOR ALL USING (true);
+CREATE TRIGGER update_app_settings_modtime BEFORE UPDATE ON public.app_settings FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: user_roles
+ALTER TABLE public.user_roles ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.user_roles FOR ALL USING (true);
+CREATE TRIGGER update_user_roles_modtime BEFORE UPDATE ON public.user_roles FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: users
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.users FOR ALL USING (true);
+CREATE TRIGGER update_users_modtime BEFORE UPDATE ON public.users FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: grants
+ALTER TABLE public.grants ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.grants FOR ALL USING (true);
+CREATE TRIGGER update_grants_modtime BEFORE UPDATE ON public.grants FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: bank_transactions
+ALTER TABLE public.bank_transactions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.bank_transactions FOR ALL USING (true);
+CREATE TRIGGER update_bank_transactions_modtime BEFORE UPDATE ON public.bank_transactions FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: budget_lines
+ALTER TABLE public.budget_lines ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.budget_lines FOR ALL USING (true);
+CREATE TRIGGER update_budget_lines_modtime BEFORE UPDATE ON public.budget_lines FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: sub_budget_lines
+ALTER TABLE public.sub_budget_lines ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.sub_budget_lines FOR ALL USING (true);
+CREATE TRIGGER update_sub_budget_lines_modtime BEFORE UPDATE ON public.sub_budget_lines FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: engagements
+ALTER TABLE public.engagements ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.engagements FOR ALL USING (true);
+CREATE TRIGGER update_engagements_modtime BEFORE UPDATE ON public.engagements FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: payments
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.payments FOR ALL USING (true);
+CREATE TRIGGER update_payments_modtime BEFORE UPDATE ON public.payments FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: prefinancings
+ALTER TABLE public.prefinancings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.prefinancings FOR ALL USING (true);
+CREATE TRIGGER update_prefinancings_modtime BEFORE UPDATE ON public.prefinancings FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- Table: employee_loans
+ALTER TABLE public.employee_loans ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for users" ON public.employee_loans FOR ALL USING (true);
+CREATE TRIGGER update_employee_loans_modtime BEFORE UPDATE ON public.employee_loans FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+
+=================================================================================
+### Insertion du Rôle Administrateur (Accès Total)
+=================================================================================
+
+INSERT INTO public.user_roles (name, code, description, color, permissions)
+VALUES (
+  'Administrateur',
+  'ADMIN',
+  'Accès complet à toutes les fonctionnalités du système',
+  '#0F172A',
+  '[
+    {"module": "dashboard", "actions": ["view"]},
+    {"module": "grants", "actions": ["view", "create", "edit", "delete"]},
+    {"module": "budget_planning", "actions": ["view", "create", "edit", "delete", "export"]},
+    {"module": "tracking", "actions": ["view", "create", "edit", "delete", "export"]},
+    {"module": "engagements", "actions": ["view", "create", "edit", "delete", "sign"]},
+    {"module": "payments", "actions": ["view", "create", "edit", "delete", "sign"]},
+    {"module": "treasury", "actions": ["view", "create", "edit", "delete", "export"]},
+    {"module": "prefinancing", "actions": ["view", "create", "edit", "delete", "sign"]},
+    {"module": "employee_loans", "actions": ["view", "create", "edit", "delete", "sign"]},
+    {"module": "reports", "actions": ["view", "create", "export"]},
+    {"module": "users", "actions": ["view", "create", "edit", "delete"]},
+    {"module": "globalConfig", "actions": ["view", "create", "edit", "delete"]},
+    {"module": "profile", "actions": ["view", "edit"]},
+    {"module": "bank_accounts", "actions": ["view", "create", "edit", "delete"]},
+    {"module": "bank_transactions", "actions": ["view", "create", "edit", "delete", "export"]}
+  ]'::jsonb
+);
+
+
+
+=========================================FIN PRECONFIGURATION==============================================
+
+
+
+
 
 ### Sécurité des Données (RLS)
 
@@ -652,7 +911,7 @@ VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_ANON_KEY=your-anon-key
 
 # Application
-VITE_APP_NAME=BudgetFlow
+VITE_APP_NAME=BudgetBase
 VITE_APP_VERSION=1.0.0
 ```
 
@@ -981,16 +1240,16 @@ CREATE INDEX idx_sub_budget_lines_grant_budget
 
 ```typescript
 // Plugin system pour extensions
-interface BudgetFlowPlugin {
+interface BudgetBasePlugin {
   name: string;
   version: string;
-  initialize: (app: BudgetFlowApp) => void;
+  initialize: (app: BudgetBaseApp) => void;
   routes?: Route[];
   components?: ComponentMap;
 }
 
 // Enregistrement de plugins
-const registerPlugin = (plugin: BudgetFlowPlugin) => {
+const registerPlugin = (plugin: BudgetBasePlugin) => {
   plugins.set(plugin.name, plugin);
   plugin.initialize(app);
 };
@@ -1019,7 +1278,7 @@ $$ LANGUAGE sql STABLE;
 #!/bin/bash
 # deploy.sh
 
-echo "🚀 Déploiement BudgetFlow"
+echo "🚀 Déploiement BudgetBase"
 
 # Vérifications pré-déploiement
 npm run type-check

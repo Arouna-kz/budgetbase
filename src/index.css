@@ -183,3 +183,199 @@
 .animate-pulse {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* Barre de progression indéterminée de l'écran de chargement */
+@keyframes loadingbar {
+  0% { transform: translateX(-140%); }
+  100% { transform: translateX(320%); }
+}
+
+/* ============================================================
+   THÈME & FOND PROFESSIONNEL + MODE SOMBRE
+   ============================================================ */
+
+html { scroll-behavior: smooth; }
+
+/* Transition douce lors du changement de thème */
+body,
+.app-shell,
+.bg-white,
+[class*="bg-gray-"],
+[class*="border-gray-"] {
+  transition: background-color .25s ease, color .25s ease, border-color .25s ease;
+}
+
+/* Fond applicatif professionnel (mode clair) */
+.app-shell {
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(99, 102, 241, 0.08), transparent 60%),
+    radial-gradient(1000px 520px at -10% 110%, rgba(168, 85, 247, 0.08), transparent 55%),
+    linear-gradient(135deg, #f6f8fc 0%, #eef2ff 100%);
+}
+
+/* Cartes plus distinctes (relief + contour subtil) — s'applique aux conteneurs blancs arrondis */
+.app-shell .bg-white.rounded-xl,
+.app-shell .bg-white.rounded-2xl {
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 12px 28px -14px rgba(16, 24, 40, 0.18);
+}
+
+/* ---------- MODE SOMBRE ---------- */
+.dark { color-scheme: dark; }
+
+.dark .app-shell,
+.app-shell.dark {
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(99, 102, 241, 0.14), transparent 60%),
+    radial-gradient(1000px 520px at -10% 110%, rgba(168, 85, 247, 0.12), transparent 55%),
+    linear-gradient(135deg, #0b1120 0%, #0f172a 100%);
+}
+
+/* Surfaces neutres */
+.dark .bg-white { background-color: #1e293b !important; }
+.dark .bg-gray-50 { background-color: #0f172a !important; }
+.dark .bg-slate-50 { background-color: #0f172a !important; }
+.dark .bg-gray-100 { background-color: #1e293b !important; }
+.dark .bg-gray-200 { background-color: #334155 !important; }
+
+/* Teintes douces -> versions sombres translucides (cartes de statut) */
+.dark .bg-blue-50 { background-color: rgba(59, 130, 246, 0.14) !important; }
+.dark .bg-indigo-50 { background-color: rgba(99, 102, 241, 0.14) !important; }
+.dark .bg-purple-50 { background-color: rgba(168, 85, 247, 0.14) !important; }
+.dark .bg-green-50 { background-color: rgba(34, 197, 94, 0.14) !important; }
+.dark .bg-emerald-50 { background-color: rgba(16, 185, 129, 0.14) !important; }
+.dark .bg-red-50 { background-color: rgba(239, 68, 68, 0.14) !important; }
+.dark .bg-yellow-50 { background-color: rgba(234, 179, 8, 0.14) !important; }
+.dark .bg-orange-50 { background-color: rgba(249, 115, 22, 0.14) !important; }
+
+/* Texte */
+.dark .text-gray-900 { color: #f1f5f9 !important; }
+.dark .text-gray-800 { color: #e2e8f0 !important; }
+.dark .text-gray-700 { color: #cbd5e1 !important; }
+.dark .text-gray-600 { color: #94a3b8 !important; }
+.dark .text-gray-500 { color: #94a3b8 !important; }
+
+/* Bordures */
+.dark .border-gray-100 { border-color: #1f2a3b !important; }
+.dark .border-gray-200 { border-color: #334155 !important; }
+.dark .border-gray-300 { border-color: #475569 !important; }
+
+/* Champs de saisie */
+.dark input,
+.dark select,
+.dark textarea {
+  background-color: #0f172a !important;
+  color: #e2e8f0 !important;
+  border-color: #334155 !important;
+}
+.dark input::placeholder,
+.dark textarea::placeholder { color: #64748b !important; }
+
+/* Survols neutres */
+.dark .hover\:bg-gray-50:hover { background-color: #334155 !important; }
+.dark .hover\:bg-gray-100:hover { background-color: #334155 !important; }
+
+/* Ombres de cartes plus prononcées en sombre */
+.dark .app-shell .bg-white.rounded-xl,
+.dark .app-shell .bg-white.rounded-2xl {
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 16px 32px -14px rgba(0, 0, 0, 0.6);
+}
+
+/* Scrollbar en sombre */
+.dark .scrollbar-thin::-webkit-scrollbar-track { background: #1e293b; }
+.dark .scrollbar-thin::-webkit-scrollbar-thumb { background: #475569; }
+
+/* ============================================================
+   MODE SOMBRE — LISIBILITÉ : dégradés clairs -> sombres + texte coloré éclairci
+   ============================================================ */
+
+/* ---- (A) Stops de dégradé blancs/neutres -> surface sombre ---- */
+.dark .from-white,
+.dark .from-gray-50, .dark .from-gray-100,
+.dark .from-slate-50, .dark .from-slate-100 { --tw-gradient-from: #1e293b !important; }
+.dark .to-white,
+.dark .to-gray-50, .dark .to-gray-100,
+.dark .to-slate-50, .dark .to-slate-100 { --tw-gradient-to: #1e293b !important; }
+.dark .via-white { --tw-gradient-stops: var(--tw-gradient-from), #1e293b var(--tw-gradient-via-position), var(--tw-gradient-to) !important; }
+
+/* ---- (A bis) Stops de dégradé teintés clairs (-50/-100) -> teinte sombre ---- */
+.dark .from-blue-50,   .dark .from-blue-100   { --tw-gradient-from: #1c2740 !important; }
+.dark .to-blue-50,     .dark .to-blue-100     { --tw-gradient-to:   #1c2740 !important; }
+.dark .from-indigo-50, .dark .from-indigo-100 { --tw-gradient-from: #1e2147 !important; }
+.dark .to-indigo-50,   .dark .to-indigo-100   { --tw-gradient-to:   #1e2147 !important; }
+.dark .from-purple-50, .dark .from-purple-100 { --tw-gradient-from: #251a3c !important; }
+.dark .to-purple-50,   .dark .to-purple-100   { --tw-gradient-to:   #251a3c !important; }
+.dark .from-violet-50, .dark .from-violet-100 { --tw-gradient-from: #221a3d !important; }
+.dark .to-violet-50,   .dark .to-violet-100   { --tw-gradient-to:   #221a3d !important; }
+.dark .from-green-50,  .dark .from-green-100   { --tw-gradient-from: #14271d !important; }
+.dark .to-green-50,    .dark .to-green-100     { --tw-gradient-to:   #14271d !important; }
+.dark .from-emerald-50,.dark .from-emerald-100 { --tw-gradient-from: #0f2a20 !important; }
+.dark .to-emerald-50,  .dark .to-emerald-100   { --tw-gradient-to:   #0f2a20 !important; }
+.dark .from-teal-50,   .dark .from-teal-100    { --tw-gradient-from: #10292a !important; }
+.dark .to-teal-50,     .dark .to-teal-100      { --tw-gradient-to:   #10292a !important; }
+.dark .from-red-50,    .dark .from-red-100     { --tw-gradient-from: #2a1a1c !important; }
+.dark .to-red-50,      .dark .to-red-100       { --tw-gradient-to:   #2a1a1c !important; }
+.dark .from-rose-50,   .dark .from-rose-100    { --tw-gradient-from: #2a1a22 !important; }
+.dark .to-rose-50,     .dark .to-rose-100      { --tw-gradient-to:   #2a1a22 !important; }
+.dark .from-orange-50, .dark .from-orange-100  { --tw-gradient-from: #2a2015 !important; }
+.dark .to-orange-50,   .dark .to-orange-100    { --tw-gradient-to:   #2a2015 !important; }
+.dark .from-amber-50,  .dark .from-amber-100   { --tw-gradient-from: #2a2413 !important; }
+.dark .to-amber-50,    .dark .to-amber-100     { --tw-gradient-to:   #2a2413 !important; }
+.dark .from-yellow-50, .dark .from-yellow-100  { --tw-gradient-from: #2a2712 !important; }
+.dark .to-yellow-50,   .dark .to-yellow-100    { --tw-gradient-to:   #2a2712 !important; }
+.dark .from-sky-50,    .dark .from-sky-100     { --tw-gradient-from: #142736 !important; }
+.dark .to-sky-50,      .dark .to-sky-100       { --tw-gradient-to:   #142736 !important; }
+.dark .from-cyan-50,   .dark .from-cyan-100    { --tw-gradient-from: #112a2c !important; }
+.dark .to-cyan-50,     .dark .to-cyan-100      { --tw-gradient-to:   #112a2c !important; }
+.dark .from-pink-50,   .dark .from-pink-100    { --tw-gradient-from: #2a1a24 !important; }
+.dark .to-pink-50,     .dark .to-pink-100      { --tw-gradient-to:   #2a1a24 !important; }
+
+/* ---- (B) Fonds solides teintés -100 (badges/pastilles) -> teinte sombre translucide ---- */
+.dark .bg-blue-100    { background-color: rgba(59, 130, 246, 0.20) !important; }
+.dark .bg-indigo-100  { background-color: rgba(99, 102, 241, 0.20) !important; }
+.dark .bg-purple-100  { background-color: rgba(168, 85, 247, 0.20) !important; }
+.dark .bg-violet-100  { background-color: rgba(139, 92, 246, 0.20) !important; }
+.dark .bg-green-100   { background-color: rgba(34, 197, 94, 0.20) !important; }
+.dark .bg-emerald-100 { background-color: rgba(16, 185, 129, 0.20) !important; }
+.dark .bg-teal-100    { background-color: rgba(20, 184, 166, 0.20) !important; }
+.dark .bg-red-100     { background-color: rgba(239, 68, 68, 0.20) !important; }
+.dark .bg-rose-100    { background-color: rgba(244, 63, 94, 0.20) !important; }
+.dark .bg-orange-100  { background-color: rgba(249, 115, 22, 0.20) !important; }
+.dark .bg-amber-100   { background-color: rgba(245, 158, 11, 0.20) !important; }
+.dark .bg-yellow-100  { background-color: rgba(234, 179, 8, 0.20) !important; }
+.dark .bg-sky-100     { background-color: rgba(14, 165, 233, 0.20) !important; }
+.dark .bg-cyan-100    { background-color: rgba(6, 182, 212, 0.20) !important; }
+.dark .bg-pink-100    { background-color: rgba(236, 72, 153, 0.20) !important; }
+
+/* ---- (C) Texte coloré foncé -> éclairci pour rester lisible sur fond sombre ---- */
+/* Tons foncés (700/800/900) -> 300 */
+.dark .text-blue-900, .dark .text-blue-800, .dark .text-blue-700 { color: #93c5fd !important; }
+.dark .text-indigo-900, .dark .text-indigo-800, .dark .text-indigo-700 { color: #a5b4fc !important; }
+.dark .text-purple-900, .dark .text-purple-800, .dark .text-purple-700 { color: #d8b4fe !important; }
+.dark .text-violet-900, .dark .text-violet-800, .dark .text-violet-700 { color: #c4b5fd !important; }
+.dark .text-green-900, .dark .text-green-800, .dark .text-green-700 { color: #86efac !important; }
+.dark .text-emerald-900, .dark .text-emerald-800, .dark .text-emerald-700 { color: #6ee7b7 !important; }
+.dark .text-teal-900, .dark .text-teal-800, .dark .text-teal-700 { color: #5eead4 !important; }
+.dark .text-red-900, .dark .text-red-800, .dark .text-red-700 { color: #fca5a5 !important; }
+.dark .text-rose-900, .dark .text-rose-800, .dark .text-rose-700 { color: #fda4af !important; }
+.dark .text-orange-900, .dark .text-orange-800, .dark .text-orange-700 { color: #fdba74 !important; }
+.dark .text-amber-900, .dark .text-amber-800, .dark .text-amber-700 { color: #fcd34d !important; }
+.dark .text-yellow-900, .dark .text-yellow-800, .dark .text-yellow-700 { color: #fde047 !important; }
+.dark .text-sky-900, .dark .text-sky-800, .dark .text-sky-700 { color: #7dd3fc !important; }
+.dark .text-cyan-900, .dark .text-cyan-800, .dark .text-cyan-700 { color: #67e8f9 !important; }
+.dark .text-pink-900, .dark .text-pink-800, .dark .text-pink-700 { color: #f9a8d4 !important; }
+/* Tons moyens (500/600) -> 400 */
+.dark .text-blue-600, .dark .text-blue-500 { color: #60a5fa !important; }
+.dark .text-indigo-600, .dark .text-indigo-500 { color: #818cf8 !important; }
+.dark .text-purple-600, .dark .text-purple-500 { color: #c084fc !important; }
+.dark .text-violet-600, .dark .text-violet-500 { color: #a78bfa !important; }
+.dark .text-green-600, .dark .text-green-500 { color: #4ade80 !important; }
+.dark .text-emerald-600, .dark .text-emerald-500 { color: #34d399 !important; }
+.dark .text-teal-600, .dark .text-teal-500 { color: #2dd4bf !important; }
+.dark .text-red-600, .dark .text-red-500 { color: #f87171 !important; }
+.dark .text-rose-600, .dark .text-rose-500 { color: #fb7185 !important; }
+.dark .text-orange-600, .dark .text-orange-500 { color: #fb923c !important; }
+.dark .text-amber-600, .dark .text-amber-500 { color: #fbbf24 !important; }
+.dark .text-yellow-600, .dark .text-yellow-500 { color: #facc15 !important; }
+.dark .text-sky-600, .dark .text-sky-500 { color: #38bdf8 !important; }
+.dark .text-cyan-600, .dark .text-cyan-500 { color: #22d3ee !important; }
+.dark .text-pink-600, .dark .text-pink-500 { color: #f472b6 !important; }

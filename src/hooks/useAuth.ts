@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { User as SupabaseUser, AuthChangeEvent, Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import { User, UserRole, DEFAULT_ROLES } from '../types/user';
-// import { DEFAULT_ROLES } from '../types/user';
+import { User, UserRole } from '../types/user';
 
 export const useAuth = () => {
   const [user, setUser] = useState<SupabaseUser | null>(null);
@@ -11,19 +10,20 @@ export const useAuth = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Évite les chargements de profil concurrents/redondants (TOKEN_REFRESHED, doubles événements)
+  const loadedUserIdRef = useRef<string | null>(null);
+  const loadingProfileRef = useRef(false);
+
   useEffect(() => {
     let mounted = true;
 
     const initializeAuth = async () => {
       try {
-        // Get initial session
         const { data: { session }, error: sessionError } = await supabase.auth.getSession();
         
         if (sessionError) {
           console.warn('Supabase auth session error:', sessionError);
-          if (mounted) {
-            setLoading(false);
-          }
+          if (mounted) setLoading(false);
           return;
         }
         
@@ -31,7 +31,7 @@ export const useAuth = () => {
           setUser(session.user);
           await loadUserProfile(session.user.id);
         } else if (mounted) {
-          setLoading(false); // Aucun utilisateur connecté
+          setLoading(false);
         }
       } catch (err: any) {
         console.error('Auth initialization error:', err);
@@ -44,26 +44,27 @@ export const useAuth = () => {
 
     initializeAuth();
 
-    // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event: AuthChangeEvent, session: Session | null) => {
+      (event: AuthChangeEvent, session: Session | null) => {
         if (!mounted) return;
 
-        try {
-          if (session?.user) {
-            setUser(session.user);
-            await loadUserProfile(session.user.id);
-          } else {
-            setUser(null);
-            setUserProfile(null);
-            setUserRole(null);
-            setLoading(false); // Seulement ici pour la déconnexion
+        if (session?.user) {
+          setUser(session.user);
+          // ⚠️ Ne PAS appeler d'API Supabase (ex: .from().select()) directement dans ce
+          // callback : cela détient le verrou d'auth et provoque un deadlock (timeout).
+          // On diffère hors du callback et on évite de recharger le même profil.
+          if (loadedUserIdRef.current !== session.user.id) {
+            const userId = session.user.id;
+            setTimeout(() => {
+              if (mounted) loadUserProfile(userId);
+            }, 0);
           }
-        } catch (err) {
-          console.error('Error in auth state change:', err);
-          if (mounted) {
-            setLoading(false);
-          }
+        } else {
+          loadedUserIdRef.current = null;
+          setUser(null);
+          setUserProfile(null);
+          setUserRole(null);
+          setLoading(false);
         }
       }
     );
@@ -74,137 +75,125 @@ export const useAuth = () => {
     };
   }, []);
 
-  // Dans src/hooks/useAuth.ts
-const loadUserProfile = async (userId: string) => {
-  let mounted = true;
-  
-  try {
-    // Load user profile from Supabase avec un timeout plus court
-    const profilePromise = supabase
-      .from('users')
-      .select('*')
-      .eq('id', userId)
-      .single();
+  const loadUserProfile = async (userId: string) => {
+    // Évite les chargements concurrents (initializeAuth + INITIAL_SESSION, doubles événements)
+    if (loadingProfileRef.current) return;
+    loadingProfileRef.current = true;
+    loadedUserIdRef.current = userId;
+    let mounted = true;
 
-    // Réduire le timeout à 10 secondes (au lieu de 30)
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Timeout loading user profile')), 10000)
-    );
-
-    const result = await Promise.race([profilePromise, timeoutPromise]);
-    const { data: profile, error: profileError } = result as any;
-
-    if (profileError) {
-      console.warn('Profile not found in Supabase:', profileError);
-      if (mounted) {
-        setLoading(false);
-      }
-      return;
-    }
-
-    if (profile) {
-      const userProfileData: User = {
-        id: profile.id,
-        email: profile.email,
-        firstName: profile.first_name,
-        lastName: profile.last_name,
-        profession: profile.profession || undefined,
-        employeeId: profile.employee_id || undefined,
-        roleId: profile.role_id,
-        isActive: profile.is_active,
-        lastLogin: profile.last_login || undefined,
-        createdAt: profile.created_at,
-        updatedAt: profile.updated_at,
-        createdBy: profile.created_by
-      };
-      setUserProfile(userProfileData);
-
-      // Load user role avec timeout réduit
-      const rolePromise = supabase
-        .from('user_roles')
+    try {
+      // Timeout de 10 secondes pour le profil
+      const profilePromise = supabase
+        .from('users')
         .select('*')
-        .eq('id', profile.role_id)
+        .eq('id', userId)
         .single();
 
-      const roleTimeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Timeout loading role')), 5000) // 5 secondes au lieu de 15
+      const profileTimeout = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout loading user profile')), 10000)
       );
 
-      try {
-        const roleResult = await Promise.race([rolePromise, roleTimeoutPromise]);
-        const { data: role, error: roleError } = roleResult as any;
+      const profileResult = await Promise.race([profilePromise, profileTimeout]);
+      const { data: profile, error: profileError } = profileResult as any;
 
-        if (roleError) {
-          console.warn('Error loading role from Supabase:', roleError);
-          // Fallback vers les rôles par défaut
-          const defaultRole = DEFAULT_ROLES.find(r => r.id === profile.role_id);
-          if (defaultRole) {
-            setUserRole(defaultRole);
-          }
-        } else if (role) {
-          const userRoleData: UserRole = {
-            id: role.id,
-            name: role.name,
-            code: role.code,
-            description: role.description,
-            permissions: role.permissions as any,
-            color: role.color,
-            isActive: role.is_active,
-            createdAt: role.created_at,
-            updatedAt: role.updated_at
-          };
-          setUserRole(userRoleData);
-        }
-      } catch (roleError) {
-        console.warn('Error loading role (timeout or other):', roleError);
-        // Fallback vers les rôles par défaut
-        const defaultRole = DEFAULT_ROLES.find(r => r.id === profile.role_id);
-        if (defaultRole) {
-          setUserRole(defaultRole);
-        }
+      if (profileError) {
+        console.warn('Profile not found in Supabase:', profileError);
+        if (mounted) setLoading(false);
+        return;
       }
 
-      // Update last login (ne pas bloquer sur ça)
-      try {
-        await supabase
+      if (profile) {
+        const userProfileData: User = {
+          id: profile.id,
+          email: profile.email,
+          firstName: profile.first_name,
+          lastName: profile.last_name,
+          profession: profile.profession || undefined,
+          employeeId: profile.employee_id || undefined,
+          roleId: profile.role_id,
+          isActive: profile.is_active,
+          lastLogin: profile.last_login || undefined,
+          createdAt: profile.created_at,
+          updatedAt: profile.updated_at,
+          createdBy: profile.created_by
+        };
+        setUserProfile(userProfileData);
+
+        // Timeout de 5 secondes pour le rôle
+        const rolePromise = supabase
+          .from('user_roles')
+          .select('*')
+          .eq('id', profile.role_id)
+          .single();
+
+        const roleTimeout = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Timeout loading role')), 5000)
+        );
+
+        try {
+          const roleResult = await Promise.race([rolePromise, roleTimeout]);
+          const { data: role, error: roleError } = roleResult as any;
+
+          if (roleError) {
+            console.error('Error loading role from database:', roleError);
+          } else if (role) {
+            const userRoleData: UserRole = {
+              id: role.id,
+              name: role.name,
+              code: role.code,
+              description: role.description,
+              permissions: role.permissions as any,
+              color: role.color,
+              isActive: role.is_active,
+              createdAt: role.created_at,
+              updatedAt: role.updated_at
+            };
+            setUserRole(userRoleData);
+          }
+        } catch (roleError) {
+          console.warn('Error loading role (timeout or other):', roleError);
+          // Pas de fallback vers DEFAULT_ROLES, juste une erreur silencieuse
+        }
+
+        // Mettre à jour last_login en arrière-plan
+        supabase
           .from('users')
           .update({ 
             last_login: new Date().toISOString(),
             updated_at: new Date().toISOString()
           })
-          .eq('id', userId);
-      } catch (updateError) {
-        console.warn('Could not update last login:', updateError);
+          .eq('id', userId)
+          .then(({ error }) => {
+            if (error) console.warn('Could not update last login:', error);
+          });
       }
+      
+      if (mounted) setLoading(false);
+    } catch (err: any) {
+      // Échec (ex: timeout) → réautoriser un nouvel essai lors d'un prochain événement d'auth
+      loadedUserIdRef.current = null;
+      console.warn('Chargement du profil utilisateur échoué:', err?.message || err);
+      if (mounted) {
+        setError(err.message);
+        setLoading(false);
+      }
+    } finally {
+      loadingProfileRef.current = false;
     }
-    
-    // FINALLY set loading to false
-    if (mounted) {
-      setLoading(false);
-    }
-  } catch (err: any) {
-    console.error('Error loading user profile:', err);
-    if (mounted) {
-      setError(err.message);
-      setLoading(false); // IMPORTANT: Toujours mettre loading à false même en cas d'erreur
-    }
-  }
-};
+  };
 
   const signIn = async (email: string, password: string) => {
     try {
       setError(null);
       setLoading(true);
       
-      // Connexion Supabase
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password
       });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
       
       return { success: true, user: data.user };
     } catch (err: any) {
@@ -216,173 +205,156 @@ const loadUserProfile = async (userId: string) => {
   };
 
   const signUp = async (email: string, password: string, userData: {
-  firstName: string;
-  lastName: string;
-  profession?: string;
-  employeeId?: string;
-}) => {
-  try {
-    setError(null);
-    setLoading(true);
+    firstName: string;
+    lastName: string;
+    profession?: string;
+    employeeId?: string;
+  }) => {
+    try {
+      setError(null);
+      setLoading(true);
 
-    // 1. Créer le compte Auth
-    const { data, error: authError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        // emailRedirectTo: `${window.location.origin}/auth/callback`, // Optionnel pour confirmer l'email
-        data: {
-          first_name: userData.firstName,
-          last_name: userData.lastName
+      const { data, error: authError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            first_name: userData.firstName,
+            last_name: userData.lastName
+          }
         }
+      });
+
+      if (authError) {
+        console.error('Auth signup error:', authError);
+        throw authError;
       }
-    });
 
-    if (authError) {
-      console.error('Auth signup error:', authError);
-      throw authError;
-    }
+      if (!data.user) {
+        throw new Error('No user object returned from authentication');
+      }
 
-    if (!data.user) {
-      throw new Error('No user object returned from authentication');
-    }
+      const { data: adminRole, error: roleError } = await supabase
+        .from('user_roles')
+        .select('id')
+        .eq('code', 'ADMIN')
+        .single();
 
-    // 2. Trouver le rôle ADMIN
-    const { data: adminRole, error: roleError } = await supabase
-      .from('user_roles')
-      .select('id')
-      .eq('code', 'ADMIN')
-      .single();
+      if (roleError) {
+        console.error('Error finding admin role:', roleError);
+        throw new Error('Le rôle administrateur (ADMIN) est introuvable dans la base de données.');
+      }
 
-    if (roleError) {
-      console.error('Error finding admin role:', roleError);
-      throw new Error('Le rôle administrateur (ADMIN) est introuvable dans la base de données. Veuillez contacter le support.');
-    }
+      const newUserProfile = {
+        id: data.user.id,
+        email: data.user.email!,
+        first_name: userData.firstName,
+        last_name: userData.lastName,
+        profession: userData.profession || null,
+        employee_id: userData.employeeId || null,
+        role_id: adminRole.id,
+        is_active: true,
+        created_by: data.user.id
+      };
 
-    // 3. Créer le profil dans public.users
-    const newUserProfile = {
-      id: data.user.id,
-      email: data.user.email!,
-      first_name: userData.firstName,
-      last_name: userData.lastName,
-      profession: userData.profession || null, // Use null instead of undefined for SQL
-      employee_id: userData.employeeId || null,
-      role_id: adminRole.id,
-      is_active: true,
-      created_by: data.user.id
-      // created_at and updated_at should be automatically set by DEFAULT NOW() in your table
-    };
+      const { data: newUserData, error: userError } = await supabase
+        .from('users')
+        .insert(newUserProfile)
+        .select()
+        .single();
 
-    const { data: newUserData, error: userError } = await supabase
-      .from('users')
-      .insert(newUserProfile)
-      .select()
-      .single();
-
-    if (userError) {
-      console.error('Supabase error creating user profile:', userError);
-      console.error('Error code:', userError.code, 'Details:', userError.details);
-      // Tentative de suppression du compte auth si le profil échoue
-      try {
+      if (userError) {
+        console.error('Supabase error creating user profile:', userError);
         await supabase.auth.signOut();
-        // Note: supabase.auth.admin.deleteUser(data.user.id) serait nécessaire pour supprimer vraiment, mais nécessite des droits admin
-      } catch (signOutError) {
-        console.error('Error during cleanup after failed profile creation:', signOutError);
+        throw new Error(`CREATE_PROFILE_FAILED_${userError.code}`);
       }
-      // Lance une erreur avec le code pour faciliter le debug (ex: '23505' pour violation de contrainte unique)
-      throw new Error(`CREATE_PROFILE_FAILED_${userError.code}: Échec de la création du profil.`);
+
+      const newUser: User = {
+        id: newUserData.id,
+        email: newUserData.email,
+        firstName: newUserData.first_name,
+        lastName: newUserData.last_name,
+        profession: newUserData.profession || undefined,
+        employeeId: newUserData.employee_id || undefined,
+        roleId: newUserData.role_id,
+        isActive: newUserData.is_active,
+        lastLogin: newUserData.last_login || undefined,
+        createdAt: newUserData.created_at,
+        updatedAt: newUserData.updated_at,
+        createdBy: newUserData.created_by
+      };
+
+      setUserProfile(newUser);
+
+      const { data: roleData, error: roleLoadError } = await supabase
+        .from('user_roles')
+        .select('*')
+        .eq('id', adminRole.id)
+        .single();
+
+      if (!roleLoadError && roleData) {
+        setUserRole({
+          id: roleData.id,
+          name: roleData.name,
+          code: roleData.code,
+          description: roleData.description,
+          permissions: roleData.permissions as any,
+          color: roleData.color,
+          isActive: roleData.is_active,
+          createdAt: roleData.created_at,
+          updatedAt: roleData.updated_at
+        });
+      }
+
+      return { success: true, user: data.user };
+
+    } catch (err: any) {
+      console.error('Full signup process error:', err);
+      let errorMessage = err.message;
+      
+      if (errorMessage.includes('CREATE_PROFILE_FAILED_23505')) {
+        errorMessage = 'Un utilisateur avec cet email ou cet identifiant employé existe déjà.';
+      } else if (errorMessage.includes('CREATE_PROFILE_FAILED')) {
+        errorMessage = 'Erreur technique lors de la création du profil.';
+      }
+      
+      setError(errorMessage);
+      return { success: false, error: errorMessage };
+    } finally {
+      setLoading(false);
     }
-
-    // 4. Mettre à jour l'état local
-    const newUser: User = {
-      id: newUserData.id,
-      email: newUserData.email,
-      firstName: newUserData.first_name,
-      lastName: newUserData.last_name,
-      profession: newUserData.profession || undefined,
-      employeeId: newUserData.employee_id || undefined,
-      roleId: newUserData.role_id,
-      isActive: newUserData.is_active,
-      lastLogin: newUserData.last_login ? new Date(newUserData.last_login).toISOString() : undefined,
-      createdAt: newUserData.created_at,
-      updatedAt: newUserData.updated_at,
-      createdBy: newUserData.created_by
-    };
-
-    setUserProfile(newUser);
-    // Charger le rôle à partir des DEFAULT_ROLES ou refaire une requête
-    const defaultRole = DEFAULT_ROLES.find(role => role.id === adminRole.id);
-    if (defaultRole) {
-      setUserRole(defaultRole);
-    } else {
-      console.warn('Default role not found in DEFAULT_ROLES array for ID:', adminRole.id);
-    }
-
-    return { success: true, user: data.user };
-
-  } catch (err: any) {
-    console.error('Full signup process error:', err);
-    let errorMessage = err.message;
-    // Messages d'erreur plus conviviaux
-    if (errorMessage.includes('CREATE_PROFILE_FAILED_23505')) {
-      errorMessage = 'Une violation de contrainte unique s\'est produite (probablement un email ou un employee_id déjà existant).';
-    } else if (errorMessage.includes('CREATE_PROFILE_FAILED')) {
-      errorMessage = 'Erreur technique lors de la création du profil. Veuillez réessayer ou contacter le support.';
-    }
-    setError(errorMessage);
-    return { success: false, error: errorMessage };
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
   const signOut = async () => {
     try {
       setError(null);
-      
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      
       setUser(null);
       setUserProfile(null);
       setUserRole(null);
     } catch (err: any) {
       console.error('Logout error:', err);
-      // Force logout même en cas d'erreur
       setUser(null);
       setUserProfile(null);
       setUserRole(null);
     }
   };
 
-  const isAdmin = () => {
-    return userRole?.code === 'ADMIN';
-  };
+  const isAdmin = () => userRole?.code === 'ADMIN';
 
   const hasPermission = (module: string, action: string) => {
     if (!userRole) return false;
-    
-    // Si l'utilisateur a la permission "all" avec l'action demandée, autoriser
     const globalPermission = userRole.permissions.find(p => p.module === 'all');
-    if (globalPermission && globalPermission.actions.includes(action)) {
-      return true;
-    }
-    
-    // Vérifier la permission spécifique au module
+    if (globalPermission?.actions.includes(action)) return true;
     const permission = userRole.permissions.find(p => p.module === module);
     return permission?.actions.includes(action) || false;
   };
 
   const canAccessModule = (module: string) => {
     if (!userRole) return false;
-    
-    // Si l'utilisateur a la permission "all" avec au moins une action, autoriser l'accès au module
     const globalPermission = userRole.permissions.find(p => p.module === 'all');
-    if (globalPermission && globalPermission.actions.length > 0) {
-      return true;
-    }
-    
-    // Vérifier si l'utilisateur a au moins une permission pour ce module
+    if (globalPermission?.actions.length > 0) return true;
     const permission = userRole.permissions.find(p => p.module === module);
     return permission && permission.actions.length > 0;
   };

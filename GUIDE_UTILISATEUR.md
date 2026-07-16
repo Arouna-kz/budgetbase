@@ -1,4 +1,4 @@
-# Guide Utilisateur - BudgetFlow
+# Guide Utilisateur - BudgetBase
 ## Plateforme de Gestion Budgétaire
 
 ### Version 1.0 - Janvier 2025
@@ -21,7 +21,7 @@
 
 ## Introduction
 
-BudgetFlow est une plateforme de gestion budgétaire conçue pour optimiser le suivi et la gestion des subventions, engagements, paiements et trésorerie. Cette solution permet une gestion centralisée et collaborative des finances de projet avec un contrôle rigoureux des flux financiers.
+BudgetBase est une plateforme de gestion budgétaire conçue pour optimiser le suivi et la gestion des subventions, engagements, paiements et trésorerie. Cette solution permet une gestion centralisée et collaborative des finances de projet avec un contrôle rigoureux des flux financiers.
 
 ### Objectifs de la Plateforme
 
@@ -45,9 +45,9 @@ BudgetFlow est une plateforme de gestion budgétaire conçue pour optimiser le s
 
 ### Création du Compte Administrateur
 
-Lors de la première utilisation de BudgetFlow :
+Lors de la première utilisation de BudgetBase :
 
-1. **Accès à l'application** : Rendez-vous sur l'URL de votre instance BudgetFlow
+1. **Accès à l'application** : Rendez-vous sur l'URL de votre instance BudgetBase
 2. **Création du premier compte** : Cliquez sur "Créer un compte administrateur"
 3. **Saisie des informations** :
    - Prénom et nom
@@ -442,7 +442,7 @@ R : Le système affiche des alertes visuelles mais n'empêche pas la saisie. C'e
 **Q : Les données sont-elles sauvegardées automatiquement ?**
 R : Oui, toutes les modifications sont immédiatement sauvegardées dans la base de données.
 
-**Q : Puis-je accéder à BudgetFlow hors ligne ?**
+**Q : Puis-je accéder à BudgetBase hors ligne ?**
 R : Non, une connexion internet est nécessaire pour accéder aux données.
 
 **Q : Comment récupérer des données supprimées ?**
@@ -470,9 +470,9 @@ R : Contactez l'administrateur système. Certaines données peuvent être récup
 
 ### Contacts
 
-- **Support technique** : support@budgetflow.com
-- **Formation** : formation@budgetflow.com
-- **Documentation** : docs@budgetflow.com
+- **Support technique** : support@budgetbase.com
+- **Formation** : formation@budgetbase.com
+- **Documentation** : docs@budgetbase.com
 
 ### Ressources
 

@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { X, Save, FileText, User, CheckCircle, AlertTriangle } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Save, FileText, User, CheckCircle, AlertTriangle, Download } from 'lucide-react';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import { showValidationError } from '../utils/alerts';
 import { BudgetLine, SubBudgetLine, Grant, Engagement } from '../types';
 
@@ -21,10 +23,50 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
   editingEngagement
 }) => {
   const [currentUserName, setCurrentUserName] = useState('');
-  
+  const printRef = useRef<HTMLDivElement>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  // 🎯 Télécharger la fiche d'engagement en PDF (capture fidèle du formulaire)
+  const handleDownloadPDF = async () => {
+    if (!printRef.current) return;
+    setIsDownloading(true);
+    try {
+      const canvas = await html2canvas(printRef.current, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff'
+      });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = pageWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+      while (heightLeft > 0) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      const ref = (editingEngagement ? editingEngagement.engagementNumber : formData.engagementNumber) || 'nouveau';
+      pdf.save(`Fiche_Engagement_${ref}.pdf`);
+    } catch (error) {
+      console.error('Erreur génération PDF:', error);
+      showValidationError('Erreur', 'Impossible de générer le PDF de la fiche');
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
   // Récupérer le nom de l'utilisateur connecté depuis localStorage
   useEffect(() => {
-    const savedUser = localStorage.getItem('budgetFlowCurrentUser');
+    const savedUser = localStorage.getItem('budgetBaseCurrentUser');
     if (savedUser) {
       try {
         const userData = JSON.parse(savedUser);
@@ -111,7 +153,8 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
       date: formData.date,
       supplier: formData.supplier,
       quoteReference: formData.quoteReference,
-      status: 'pending',
+      // ✅ Préserver le statut existant en modification ; "pending" seulement à la création
+      status: editingEngagement ? editingEngagement.status : 'pending',
       approvals: {
         supervisor1: approvals.supervisor1.name ? {
           name: approvals.supervisor1.name,
@@ -152,7 +195,7 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl max-w-4xl w-full p-8 max-h-[90vh] overflow-y-auto">
+      <div ref={printRef} className="bg-white rounded-2xl max-w-4xl w-full p-8 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center space-x-3">
@@ -164,12 +207,24 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
               <p className="text-gray-600">{editingEngagement ? 'Modification' : 'Nouveau'} - {subBudgetLine.name}</p>
             </div>
           </div>
-          <button
-            onClick={onCancel}
-            className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-          >
-            <X className="w-6 h-6" />
-          </button>
+          <div className="flex items-center space-x-2" data-html2canvas-ignore="true">
+            <button
+              type="button"
+              onClick={handleDownloadPDF}
+              disabled={isDownloading}
+              className="flex items-center space-x-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+              title="Télécharger la fiche en PDF"
+            >
+              <Download className="w-4 h-4" />
+              <span>{isDownloading ? 'Génération...' : 'Télécharger PDF'}</span>
+            </button>
+            <button
+              onClick={onCancel}
+              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
         </div>
 
         {/* Solde budgétaire disponible et taux d'engagement avant la demande */}
@@ -234,7 +289,7 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
                   value={formData.date}
                   onChange={(e) => setFormData(prev => ({ ...prev, date: e.target.value }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  required
+                  required={!editingEngagement}
                 />
               </div>
             </div>
@@ -457,7 +512,7 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
           )}
 
           {/* Actions */}
-          <div className="flex space-x-4 pt-6">
+          <div className="flex space-x-4 pt-6" data-html2canvas-ignore="true">
             <button
               type="button"
               onClick={onCancel}
