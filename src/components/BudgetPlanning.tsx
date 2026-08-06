@@ -1315,11 +1315,15 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                   min="0"
                                   value={budgetLineFormData.plannedAmount}
                                   onChange={(e) => setBudgetLineFormData(prev => ({ ...prev, plannedAmount: e.target.value }))}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
+                                  disabled={!editingBudgetLine}
+                                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8 ${!editingBudgetLine ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
                                   placeholder="0.00"
                                   required
                                 />
                               </div>
+                              {!editingBudgetLine && (
+                                <p className="mt-1 text-xs text-gray-500">Calculé automatiquement à partir des sous-lignes.</p>
+                              )}
                             </div>
 
                             <div>
@@ -1333,10 +1337,14 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                   min="0"
                                   value={budgetLineFormData.notifiedAmount}
                                   onChange={(e) => setBudgetLineFormData(prev => ({ ...prev, notifiedAmount: e.target.value }))}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
+                                  disabled={!editingBudgetLine}
+                                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8 ${!editingBudgetLine ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
                                   placeholder="0.00"
                                 />
                               </div>
+                              {!editingBudgetLine && (
+                                <p className="mt-1 text-xs text-gray-500">Renseigné via la notification / calculé automatiquement.</p>
+                              )}
                             </div>
                           </div>
 
@@ -1480,12 +1488,16 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                   type="number"
                                   step="0.01"
                                   min="0"
-                                  value={subBudgetLineFormData.notifiedAmount}
+                                  value={editingSubBudgetLine ? subBudgetLineFormData.notifiedAmount : '0'}
                                   onChange={(e) => setSubBudgetLineFormData(prev => ({ ...prev, notifiedAmount: e.target.value }))}
-                                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8"
+                                  disabled={!editingSubBudgetLine}
+                                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-8 ${!editingSubBudgetLine ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
                                   placeholder="0.00"
                                 />
                               </div>
+                              {!editingSubBudgetLine && (
+                                <p className="mt-1 text-xs text-gray-500">Renseigné via la notification / calculé automatiquement.</p>
+                              )}
                             </div>
                           </div>
 

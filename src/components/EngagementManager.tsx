@@ -621,15 +621,16 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     });
 
     if (strictDuplicates.length > 0) {
+      const dupCurrency = getCurrencySymbol(selectedGrant?.currency || 'EUR');
       const duplicateDetails = strictDuplicates.map(e =>
-        `• ${e.engagementNumber} - ${e.supplier} - ${e.amount.toLocaleString('fr-FR')} €`
+        `• ${e.engagementNumber} - ${e.supplier} - ${e.amount.toLocaleString('fr-FR')} ${dupCurrency}`
       ).join('\n');
 
       showWarning(
         '⚠️ Doublon détecté',
         `${strictDuplicates.length} engagement(s) similaire(s) existe(nt) déjà :\n\n${duplicateDetails}\n\n` +
         `Fournisseur: ${formData.supplier}\n` +
-        `Montant: ${formData.amount} €\n` +
+        `Montant: ${formData.amount} ${dupCurrency}\n` +
         `Sous-ligne: ${getSubBudgetLine(formData.subBudgetLineId)?.name || 'N/A'}\n\n` +
         `Voulez-vous continuer quand même ?`
       );
@@ -676,7 +677,19 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   }, [formData.invoiceNumber, editingEngagement?.id]);
 
   // Effet pour la vérification des doublons (déclenché quand le fournisseur, le montant ou la sous-ligne change)
+  // ⚠️ La détection de doublon ne concerne que la CRÉATION : en modification, on n'affiche pas ces alertes.
   useEffect(() => {
+    if (editingEngagement) {
+      setDuplicateCheck({
+        isChecking: false,
+        isDuplicate: false,
+        duplicateEngagements: [],
+        message: '',
+        duplicateType: 'none'
+      });
+      return;
+    }
+
     const timer = setTimeout(() => {
       if (formData.supplier && formData.amount && formData.subBudgetLineId && formData.supplier.length > 1) {
         checkForDuplicates(formData);
@@ -692,7 +705,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [formData.supplier, formData.amount, formData.subBudgetLineId, formData.description, formData.quoteReference, formData.invoiceNumber, checkForDuplicates]);
+  }, [formData.supplier, formData.amount, formData.subBudgetLineId, formData.description, formData.quoteReference, formData.invoiceNumber, checkForDuplicates, editingEngagement]);
 
   const calculateAvailableAmount = () => {
     const subBudgetLine = subBudgetLines.find(line => line.id === formData.subBudgetLineId);
@@ -2083,7 +2096,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                   <span>•</span>
                   <span>{eng.supplier}</span>
                   <span>•</span>
-                  <span>{eng.amount.toLocaleString('fr-FR')} €</span>
+                  <span>{eng.amount.toLocaleString('fr-FR')} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}</span>
                   {eng.invoiceNumber && (
                     <>
                       <span>•</span>
@@ -2137,7 +2150,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                   <span className="mx-2 text-gray-400">•</span>
                   <span>{existingInvoiceEngagement.supplier}</span>
                   <span className="mx-2 text-gray-400">•</span>
-                  <span>{existingInvoiceEngagement.amount.toLocaleString('fr-FR')} €</span>
+                  <span>{existingInvoiceEngagement.amount.toLocaleString('fr-FR')} {getCurrencySymbol(selectedGrant?.currency || 'EUR')}</span>
                 </div>
                 <button
                   type="button"

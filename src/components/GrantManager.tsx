@@ -19,10 +19,10 @@ interface GrantManagerProps {
   prefinancings: Prefinancing[];
   employeeLoans: EmployeeLoan[];
   onAddGrant: (grant: Omit<Grant, 'id'>) => void;
-  onUpdateGrant: (id: string, updates: Partial<Grant>) => void;
+  onUpdateGrant: (id: string, updates: Partial<Grant>) => void | Promise<void>;
   onDeleteGrant: (id: string) => void;
-  onUpdateBudgetLine: (id: string, updates: Partial<BudgetLine>) => void;
-  onUpdateSubBudgetLine: (id: string, updates: Partial<SubBudgetLine>) => void;
+  onUpdateBudgetLine: (id: string, updates: Partial<BudgetLine>) => void | Promise<void>;
+  onUpdateSubBudgetLine: (id: string, updates: Partial<SubBudgetLine>) => void | Promise<void>;
   onNavigate?: (tab: string) => void;
 }
 
@@ -56,6 +56,12 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   const [showGrantDetails, setShowGrantDetails] = useState(false);
   const [selectedForExport, setSelectedForExport] = useState<Set<string>>(new Set());
   const [isExporting, setIsExporting] = useState(false);
+  // Modale « Notifier un montant »
+  const [showNotifyModal, setShowNotifyModal] = useState(false);
+  const [notifyGrant, setNotifyGrant] = useState<Grant | null>(null);
+  const [notifyMode, setNotifyMode] = useState<'add' | 'set'>('add');
+  const [notifyAmount, setNotifyAmount] = useState('');
+  const [notifyProcessing, setNotifyProcessing] = useState(false);
   const exportContainerRef = useRef<HTMLDivElement>(null);
   const ficheRef = useRef<HTMLDivElement>(null);
 
@@ -366,12 +372,11 @@ const GrantManager: React.FC<GrantManagerProps> = ({
       return;
     }
     
-    if (!formData.name || !formData.reference || !formData.grantingOrganization || !formData.totalAmount) {
+    if (!formData.name || !formData.reference || !formData.grantingOrganization) {
       showValidationError('Champs obligatoires manquants', 'Veuillez remplir tous les champs obligatoires');
       return;
     }
 
-    const notifiedAmount = parseFloat(formData.totalAmount);
     const initialBalance = parseFloat(formData.initialBalance) || 0;
 
     const bankAccount = (formData.bankAccountName || formData.accountNumber || formData.bankName) ? {
@@ -383,54 +388,10 @@ const GrantManager: React.FC<GrantManagerProps> = ({
     } : null;
 
     if (editingGrant) {
+      // ⚠️ Le montant notifié et sa répartition ne sont PLUS modifiés ici :
+      // ils se gèrent uniquement via « Notifier un montant » afin de ne pas
+      // fausser les calculs lorsque des engagements existent déjà.
       const grantBudgetLines = budgetLines.filter(line => line.grantId === editingGrant.id);
-      const currentNotifiedAmount = editingGrant.totalAmount;
-      const newNotifiedAmount = notifiedAmount;
-      
-      if (currentNotifiedAmount !== newNotifiedAmount && grantBudgetLines.length > 0) {
-        const totalPlannedAmount = grantBudgetLines.reduce((sum, line) => sum + line.plannedAmount, 0);
-        
-        if (totalPlannedAmount > 0) {
-          grantBudgetLines.forEach(line => {
-            const proportion = line.plannedAmount / totalPlannedAmount;
-            const newLineNotifiedAmount = newNotifiedAmount * proportion;
-            const newAvailableAmount = newLineNotifiedAmount - line.engagedAmount;
-            
-            onUpdateBudgetLine(line.id, {
-              notifiedAmount: newLineNotifiedAmount,
-              availableAmount: newAvailableAmount
-            });
-            
-            const lineSubBudgetLines = subBudgetLines.filter(subLine => subLine.budgetLineId === line.id);
-            if (lineSubBudgetLines.length > 0) {
-              const totalSubLinePlanned = lineSubBudgetLines.reduce((sum, subLine) => sum + subLine.plannedAmount, 0);
-              
-              if (totalSubLinePlanned > 0) {
-                lineSubBudgetLines.forEach(subLine => {
-                  const subProportion = subLine.plannedAmount / totalSubLinePlanned;
-                  const newSubLineNotifiedAmount = newLineNotifiedAmount * subProportion;
-                  const newSubLineAvailableAmount = newSubLineNotifiedAmount - subLine.engagedAmount;
-                  
-                  onUpdateSubBudgetLine(subLine.id, {
-                    notifiedAmount: newSubLineNotifiedAmount,
-                    availableAmount: newSubLineAvailableAmount
-                  });
-                });
-              }
-            }
-          });
-        } else {
-          const amountPerLine = newNotifiedAmount / grantBudgetLines.length;
-          grantBudgetLines.forEach(line => {
-            const newAvailableAmount = amountPerLine - line.engagedAmount;
-            onUpdateBudgetLine(line.id, {
-              notifiedAmount: amountPerLine,
-              availableAmount: newAvailableAmount
-            });
-          });
-        }
-      }
-
       const plannedAmount = grantBudgetLines.reduce((sum, line) => sum + line.plannedAmount, 0);
 
       onUpdateGrant(editingGrant.id, {
@@ -440,10 +401,10 @@ const GrantManager: React.FC<GrantManagerProps> = ({
         year: formData.year,
         currency: formData.currency,
         plannedAmount: plannedAmount,
-        totalAmount: notifiedAmount,
+        totalAmount: editingGrant.totalAmount, // inchangé (géré via « Notifier un montant »)
         startDate: formData.startDate,
         endDate: formData.endDate,
-        status: formData.status,
+        status: formData.status, // initialisé sur l'existant → inchangé si l'utilisateur n'y touche pas
         description: formData.description,
         bankAccount: bankAccount
       });
@@ -457,10 +418,10 @@ const GrantManager: React.FC<GrantManagerProps> = ({
         year: formData.year,
         currency: formData.currency,
         plannedAmount: 0,
-        totalAmount: notifiedAmount,
+        totalAmount: 0, // notifié = 0 à la création (à définir via « Notifier un montant »)
         startDate: formData.startDate,
         endDate: formData.endDate,
-        status: formData.status,
+        status: 'pending', // une nouvelle subvention démarre toujours "en attente"
         description: formData.description,
         bankAccount: bankAccount
       });
@@ -513,6 +474,98 @@ const GrantManager: React.FC<GrantManagerProps> = ({
   };
 
   // ============================================
+  // NOTIFICATION D'UN MONTANT (séparée de la modification)
+  // ============================================
+  const openNotifyModal = (grant: Grant) => {
+    if (!canEdit) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission de notifier un montant');
+      return;
+    }
+    const grantLineIds = new Set(budgetLines.filter(l => l.grantId === grant.id).map(l => l.id));
+    const hasStructure = grantLineIds.size > 0 && subBudgetLines.some(s => grantLineIds.has(s.budgetLineId));
+    if (!hasStructure) {
+      showValidationError('Structure budgétaire manquante', 'Ajoutez au moins une ligne et une sous-ligne budgétaire à cette subvention avant de notifier un montant.');
+      return;
+    }
+    setNotifyGrant(grant);
+    setNotifyMode('add');
+    setNotifyAmount('');
+    setShowNotifyModal(true);
+  };
+
+  const handleNotifySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!notifyGrant || notifyProcessing) return;
+
+    const amount = parseFloat(notifyAmount);
+    if (isNaN(amount) || amount <= 0) {
+      showValidationError('Montant invalide', 'Veuillez saisir un montant positif.');
+      return;
+    }
+
+    const grant = notifyGrant;
+    const grantBudgetLines = budgetLines.filter(line => line.grantId === grant.id);
+    const totalPlanned = grantBudgetLines.reduce((sum, l) => sum + l.plannedAmount, 0);
+
+    // Nouveau total notifié de la subvention
+    const wasZero = (grant.totalAmount || 0) === 0;
+    const newGrantTotal = notifyMode === 'add' ? (grant.totalAmount || 0) + amount : amount;
+    const activatesGrant = wasZero && newGrantTotal > 0 && grant.status !== 'active';
+
+    // ⚙️ Écritures SÉQUENTIELLES (une à la fois) : évite les échecs réseau
+    // "Failed to fetch" liés aux écritures concurrentes et donc les répartitions
+    // partielles qui rendaient les montants incohérents entre les pages.
+    setNotifyProcessing(true);
+    try {
+      for (const line of grantBudgetLines) {
+        const proportion = totalPlanned > 0 ? line.plannedAmount / totalPlanned : 1 / grantBudgetLines.length;
+        const lineShare = amount * proportion;
+        const newLineNotified = notifyMode === 'add' ? line.notifiedAmount + lineShare : lineShare;
+        await onUpdateBudgetLine(line.id, {
+          notifiedAmount: newLineNotified,
+          availableAmount: newLineNotified - line.engagedAmount
+        });
+
+        const subs = subBudgetLines.filter(s => s.budgetLineId === line.id);
+        const totalSubPlanned = subs.reduce((sum, s) => sum + s.plannedAmount, 0);
+        for (const s of subs) {
+          const subProportion = totalSubPlanned > 0 ? s.plannedAmount / totalSubPlanned : 1 / subs.length;
+          const subShare = lineShare * subProportion;
+          const newSubNotified = notifyMode === 'add' ? s.notifiedAmount + subShare : subShare;
+          await onUpdateSubBudgetLine(s.id, {
+            notifiedAmount: newSubNotified,
+            availableAmount: newSubNotified - s.engagedAmount
+          });
+        }
+      }
+
+      // Grant en dernier (une fois la répartition persistée)
+      await onUpdateGrant(grant.id, {
+        plannedAmount: totalPlanned,
+        totalAmount: newGrantTotal,
+        ...(activatesGrant ? { status: 'active' as Grant['status'] } : {})
+      });
+
+      showSuccess(
+        'Montant notifié',
+        activatesGrant
+          ? 'Le montant a été notifié et réparti. La subvention est désormais « Active ».'
+          : notifyMode === 'add'
+          ? 'Le montant a été ajouté et réparti sans écraser la répartition existante.'
+          : 'Le montant notifié total a été mis à jour et redistribué.'
+      );
+      setShowNotifyModal(false);
+      setNotifyGrant(null);
+      setNotifyAmount('');
+    } catch (error) {
+      console.error('Erreur lors de la notification du montant:', error);
+      showError('Erreur', 'La répartition n\'a pas pu être entièrement enregistrée. Vérifiez votre connexion et réessayez.');
+    } finally {
+      setNotifyProcessing(false);
+    }
+  };
+
+  // ============================================
   // FONCTIONS D'AFFICHAGE
   // ============================================
 
@@ -558,6 +611,18 @@ const GrantManager: React.FC<GrantManagerProps> = ({
       case 'completed': return 'Terminée';
       case 'suspended': return 'Suspendue';
       default: return status;
+    }
+  };
+
+  // Couleur d'accent (bordure gauche + bandeau d'en-tête) selon le statut,
+  // pour distinguer nettement chaque subvention.
+  const getStatusAccent = (status: Grant['status']) => {
+    switch (status) {
+      case 'active': return { border: 'border-l-green-500', band: 'from-green-50', dot: 'bg-green-500' };
+      case 'pending': return { border: 'border-l-amber-400', band: 'from-amber-50', dot: 'bg-amber-400' };
+      case 'completed': return { border: 'border-l-blue-500', band: 'from-blue-50', dot: 'bg-blue-500' };
+      case 'suspended': return { border: 'border-l-red-500', band: 'from-red-50', dot: 'bg-red-500' };
+      default: return { border: 'border-l-gray-400', band: 'from-gray-50', dot: 'bg-gray-400' };
     }
   };
 
@@ -1279,28 +1344,26 @@ const GrantManager: React.FC<GrantManagerProps> = ({
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Montant total notifié *
+                  Montant total notifié
                 </label>
                 <div className="relative">
                   <input
-                    type="number" 
+                    type="number"
                     step="0.01"
                     min="0"
-                    value={formData.totalAmount}
-                    onChange={(e) => setFormData(prev => ({ ...prev, totalAmount: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent pl-12"
+                    value={editingGrant ? formData.totalAmount : '0'}
+                    disabled
+                    readOnly
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg pl-12 bg-gray-100 text-gray-500 cursor-not-allowed"
                     placeholder="0.00"
-                    required
                   />
                   <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-500 text-sm">
                     {getCurrencySymbol(formData.currency)}
                   </div>
                 </div>
-                {editingGrant && budgetLines.filter(line => line.grantId === editingGrant.id).length > 0 && (
-                  <p className="text-xs text-blue-600 mt-1">
-                    ⚡ La modification sera répartie proportionnellement aux lignes budgétaires
-                  </p>
-                )}
+                <p className="text-xs text-blue-600 mt-1">
+                  💡 Le montant notifié se gère via le bouton « Notifier un montant » (pour ne pas écraser la répartition existante).
+                </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1336,15 +1399,19 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                   Statut
                 </label>
                 <select
-                  value={formData.status}
+                  value={editingGrant ? formData.status : 'pending'}
                   onChange={(e) => setFormData(prev => ({ ...prev, status: e.target.value as Grant['status'] }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={!editingGrant}
+                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${!editingGrant ? 'bg-gray-100 text-gray-500 cursor-not-allowed' : ''}`}
                 >
                   <option value="pending">En attente</option>
                   <option value="active">Active</option>
                   <option value="completed">Terminée</option>
                   <option value="suspended">Suspendue</option>
                 </select>
+                {!editingGrant && (
+                  <p className="mt-1 text-xs text-gray-500">Une nouvelle subvention démarre toujours « En attente ».</p>
+                )}
               </div>
 
               <div>
@@ -1489,7 +1556,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
               </p>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-6">
               {currentSortedGrants.map((grant) => {
                 const totalEngaged = getEngagedForGrant(grant.id);
 
@@ -1504,9 +1571,19 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                 const progressRate = paymentStats.progressRate;
                 const daysRemaining = grant.endDate ? getDaysRemaining(grant.endDate) : null;
 
+                // La notification n'est possible que si la structure budgétaire existe
+                // (au moins une ligne ET une sous-ligne pour répartir le montant).
+                const grantLines = budgetLines.filter(l => l.grantId === grant.id);
+                const grantLineIds = new Set(grantLines.map(l => l.id));
+                const grantHasStructure = grantLines.length > 0 && subBudgetLines.some(s => grantLineIds.has(s.budgetLineId));
+                const accent = getStatusAccent(grant.status);
+
                 return (
-                  <div key={grant.id} className="border border-gray-200 rounded-xl p-4 md:p-6 hover:shadow-md transition-shadow">
-                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between mb-4 gap-4">
+                  <div
+                    key={grant.id}
+                    className={`bg-white rounded-2xl border border-gray-200 border-l-4 ${accent.border} shadow-sm hover:shadow-xl transition-shadow overflow-hidden`}
+                  >
+                    <div className={`flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 bg-gradient-to-r ${accent.band} to-transparent px-4 md:px-6 pt-4 pb-4 border-b border-gray-100`}>
                       <div className="flex-1">
                         <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3 mb-2 gap-2">
                           {canExport && (
@@ -1521,8 +1598,9 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                                 : <Square className="w-5 h-5" />}
                             </button>
                           )}
-                          <h4 className="text-lg font-semibold text-gray-900">{grant.name}</h4>
-                          <span className={`px-2 py-1 text-xs font-medium rounded-full w-fit ${getStatusColor(grant.status)}`}>
+                          <h4 className="text-xl font-bold text-gray-900">{grant.name}</h4>
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-full w-fit ${getStatusColor(grant.status)}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${accent.dot}`} />
                             {getStatusLabel(grant.status)}
                           </span>
                           {activePartialPayments > 0 && (
@@ -1561,6 +1639,25 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                         )}
                       </div>
                       <div className="flex items-center space-x-2 self-end lg:self-auto">
+                        {canEdit && (
+                          <button
+                            onClick={() => openNotifyModal(grant)}
+                            disabled={!grantHasStructure}
+                            className={`flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              grantHasStructure
+                                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                            }`}
+                            title={
+                              grantHasStructure
+                                ? 'Notifier un montant (ajouter ou modifier le montant notifié)'
+                                : 'Ajoutez au moins une ligne et une sous-ligne budgétaire avant de notifier un montant'
+                            }
+                          >
+                            <Plus className="w-4 h-4" />
+                            <span>Notifier un montant</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             setSelectedGrantId(grant.id);
@@ -1592,6 +1689,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                       </div>
                     </div>
 
+                    <div className="px-4 md:px-6 py-4">
                     {/* Résumé financier */}
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-2 md:gap-3 mb-4">
                       <div
@@ -1718,6 +1816,7 @@ const GrantManager: React.FC<GrantManagerProps> = ({
                         </div>
                       </div>
                     )}
+                    </div>
                   </div>
                 );
               })}
@@ -1791,6 +1890,113 @@ const GrantManager: React.FC<GrantManagerProps> = ({
             setSelectedGrantId(null);
           }}
         />
+      )}
+
+      {/* Modale « Notifier un montant » */}
+      {showNotifyModal && notifyGrant && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900">Notifier un montant</h3>
+              <button
+                onClick={() => setShowNotifyModal(false)}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm font-medium text-gray-800">{notifyGrant.name}</p>
+            <p className="text-sm text-gray-500 mb-3">
+              Montant notifié actuel :{' '}
+              <span className="font-semibold text-blue-600">
+                {formatCurrency(notifyGrant.totalAmount || 0, notifyGrant.currency)}
+              </span>
+            </p>
+
+            {(notifyGrant.totalAmount || 0) === 0 && (
+              <div className="mb-4 flex items-start gap-2 rounded-lg bg-green-50 border border-green-200 p-3">
+                <CheckCircle className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-green-800">
+                  Il s'agit du <strong>premier montant notifié</strong> : la subvention passera automatiquement au statut <strong>« Active »</strong>.
+                </p>
+              </div>
+            )}
+
+            <form onSubmit={handleNotifySubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setNotifyMode('add')}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    notifyMode === 'add' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  Ajouter un montant
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNotifyMode('set')}
+                  className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                    notifyMode === 'set' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  Modifier le total
+                </button>
+              </div>
+
+              <p className={`text-xs rounded-lg p-2 ${notifyMode === 'set' ? 'bg-orange-50 text-orange-700' : 'bg-blue-50 text-blue-700'}`}>
+                {notifyMode === 'add'
+                  ? "L'ajout est réparti au prorata du planifié et s'additionne à la répartition existante, sans l'écraser."
+                  : "⚠️ Le nouveau total remplace le notifié et redistribue tout au prorata du planifié. À éviter si des engagements existent déjà."}
+              </p>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {notifyMode === 'add' ? 'Montant à ajouter' : 'Nouveau montant total'} ({getCurrencySymbol(notifyGrant.currency)})
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={notifyAmount}
+                  onChange={(e) => setNotifyAmount(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  placeholder="0.00"
+                  autoFocus
+                  required
+                />
+              </div>
+
+              {notifyMode === 'add' && notifyAmount && !isNaN(parseFloat(notifyAmount)) && (
+                <p className="text-sm text-gray-600">
+                  Nouveau total notifié :{' '}
+                  <span className="font-semibold text-blue-600">
+                    {formatCurrency((notifyGrant.totalAmount || 0) + parseFloat(notifyAmount), notifyGrant.currency)}
+                  </span>
+                </p>
+              )}
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowNotifyModal(false)}
+                  disabled={notifyProcessing}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={notifyProcessing}
+                  className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg font-medium hover:shadow-lg transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {notifyProcessing ? 'Traitement…' : 'Valider'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

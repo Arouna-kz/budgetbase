@@ -6,10 +6,11 @@ import {
 } from 'lucide-react';
 import { Grant, BudgetLine, Engagement, Payment, EmployeeLoan, Prefinancing, DEFAULT_BUDGET_LINES, PAYMENT_STATUS, ENGAGEMENT_STATUS } from '../types';
 import { usePermissions } from '../hooks/usePermissions';
-import { showSuccess, showError } from '../utils/alerts';
+import { showSuccess, showError, showWarning } from '../utils/alerts';
 import jsPDF from 'jspdf';
 import * as XLSX from 'xlsx-js-style';
 import { EXCEL_STYLES, dataCellStyle, EXCEL_COLORS } from '../utils/excelExport';
+import { exportAccounting, countAccountingEntries } from '../utils/accountingExport';
 
 interface ReportsProps {
   grants: Grant[];
@@ -2188,6 +2189,37 @@ const Reports: React.FC<ReportsProps> = ({
     </div>
   );
 
+  // === EXPORT COMPTABLE (FEC + Journal + Grand livre + Balance) ===
+  const handleAccountingExport = () => {
+    if (!canExport) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+      return;
+    }
+    const count = countAccountingEntries(expenses, payments);
+    if (count === 0) {
+      showWarning('Aucune écriture', 'Aucun engagement approuvé ni paiement décaissé à exporter en comptabilité.');
+      return;
+    }
+    try {
+      exportAccounting({
+        engagements: expenses,
+        payments,
+        grant: selectedGrant,
+        generatedAt: new Date().toLocaleDateString('fr-FR'),
+        fileSuffix: selectedGrant?.reference || 'global',
+        includeFec: true,
+        includeExcel: true,
+      });
+      showSuccess(
+        'Export comptable réussi',
+        `${count} écriture(s) générée(s) : FEC (.txt) + Journal, Grand livre et Balance (Excel).`
+      );
+    } catch (error) {
+      console.error('Erreur export comptable:', error);
+      showError('Erreur', 'Impossible de générer l\'export comptable.');
+    }
+  };
+
   // === RENDU PRINCIPAL ===
   return (
     <div className="space-y-4 sm:space-y-6 p-3 sm:p-4">
@@ -2198,6 +2230,16 @@ const Reports: React.FC<ReportsProps> = ({
           <p className="text-gray-600 mt-1">Analyses détaillées et statistiques financières</p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {canExport && (
+            <button
+              onClick={handleAccountingExport}
+              className="bg-emerald-600 text-white px-4 py-2 rounded-xl font-medium hover:bg-emerald-700 flex items-center space-x-2 text-sm"
+              title="Export comptable : FEC (.txt) + Journal, Grand livre et Balance (Excel)"
+            >
+              <FileText className="w-4 h-4" />
+              <span>Export comptable</span>
+            </button>
+          )}
           {canExport && reportType === 'summary' && (
             <button onClick={exportSummaryToPDF} className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2 rounded-xl font-medium hover:shadow-lg flex items-center space-x-2 text-sm">
               <Download className="w-4 h-4" />

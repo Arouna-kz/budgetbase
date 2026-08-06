@@ -227,7 +227,8 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
           </div>
         </div>
 
-        {/* Solde budgétaire disponible et taux d'engagement avant la demande */}
+        {/* Solde budgétaire disponible et taux d'engagement avant la demande — uniquement à la création */}
+        {!editingEngagement && (
         <div className="bg-blue-50 rounded-xl p-6 mb-6">
           <h3 className="text-lg font-semibold text-blue-900 mb-4">Situation de la Sous-ligne Budgétaire Avant la Demande d'Engagement</h3>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -244,13 +245,13 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
             <div>
               <p className="text-sm text-blue-700 font-medium">Budget Notifié</p>
               <p className="text-blue-900 font-semibold">
-                {subBudgetLine.notifiedAmount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                {subBudgetLine.notifiedAmount.toLocaleString('fr-FR', { style: 'currency', currency: grant.currency })}
               </p>
             </div>
             <div>
               <p className="text-sm text-blue-700 font-medium">Solde Disponible</p>
               <p className={`font-semibold ${soldeDisponible >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {soldeDisponible.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                {soldeDisponible.toLocaleString('fr-FR', { style: 'currency', currency: grant.currency })}
               </p>
               <p className="text-sm text-blue-700 font-medium">Taux d'Engagement</p>
               <p className={`font-semibold ${getTauxColor(tauxEngagementActuel)}`}>
@@ -259,6 +260,7 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
             </div>
           </div>
         </div>
+        )}
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {/* Détails de l'Engagement */}
@@ -363,21 +365,21 @@ const EngagementForm: React.FC<EngagementFormProps> = ({
             </div>
           </div>
 
-          {/* Solde de la ligne budgétaire si la demande est validée */}
-          {formData.amount && (
+          {/* Solde de la ligne budgétaire si la demande est validée — uniquement à la création */}
+          {!editingEngagement && formData.amount && (
             <div className="bg-green-50 rounded-xl p-6">
               <h3 className="text-lg font-semibold text-green-900 mb-4">Solde de la Sous-ligne Budgétaire si la Demande est Validée</h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <p className="text-sm text-green-700 font-medium">Montant de l'Engagement</p>
                   <p className="text-lg font-bold text-purple-600">
-                    {montantEngagement.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                    {montantEngagement.toLocaleString('fr-FR', { style: 'currency', currency: grant.currency })}
                   </p>
                 </div>
                 <div>
                   <p className="text-sm text-green-700 font-medium">Solde de la Sous-ligne</p>
                   <p className={`font-semibold ${nouveauSolde >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                    {nouveauSolde.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                    {nouveauSolde.toLocaleString('fr-FR', { style: 'currency', currency: grant.currency })}
                   </p>
                   {nouveauSolde < 0 && (
                     <div className="flex items-center space-x-1 text-red-600 text-xs mt-1">

@@ -107,10 +107,8 @@ export function dataCellStyle(rowIndex: number, align: Align = 'left') {
 /* ------------------------------------------------------------------ */
 /*  Helper haut niveau : liste simple avec en-tête + totaux            */
 /* ------------------------------------------------------------------ */
-export function buildStyledSheet(options: StyledExcelOptions): {
-  wb: XLSX.WorkBook;
-  ws: XLSX.WorkSheet;
-} {
+/** Construit uniquement la feuille stylée (sans classeur) — utile pour composer un classeur multi-feuilles. */
+export function buildStyledWorksheet(options: StyledExcelOptions): XLSX.WorkSheet {
   const { title, infoLines = [], columns, rows, totalsRow, headerColor } = options;
   const colCount = columns.length;
 
@@ -203,6 +201,14 @@ export function buildStyledSheet(options: StyledExcelOptions): {
     ),
   };
 
+  return ws;
+}
+
+export function buildStyledSheet(options: StyledExcelOptions): {
+  wb: XLSX.WorkBook;
+  ws: XLSX.WorkSheet;
+} {
+  const ws = buildStyledWorksheet(options);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, options.sheetName);
   return { wb, ws };
