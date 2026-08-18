@@ -1498,7 +1498,8 @@ function App() {
                 <div className="backdrop-blur-sm rounded-xl border border-white/20">
                   <div className="relative w-20 h-8">
                     <img
-                      src="/budgetbase/logo.png"
+                      src="/logo.png"
+                      // src="/budgetbase/logo.png"
                       alt="Logo"
                       className="object-contain"
                     />
