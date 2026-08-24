@@ -1541,6 +1541,28 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                       Lignes Budgétaires ({sortedBudgetLines.length})
                   </h3>
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center space-y-2 sm:space-y-0 sm:space-x-4">
+                    {/* Tout développer / Tout réduire */}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedBudgetLines(new Set(sortedBudgetLines.map(l => l.id)))}
+                        className="flex items-center gap-1 px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                        title="Déplier toutes les lignes budgétaires"
+                      >
+                        <ChevronDown className="w-4 h-4" />
+                        <span className="whitespace-nowrap">Tout développer</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedBudgetLines(new Set())}
+                        className="flex items-center gap-1 px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                        title="Replier toutes les lignes budgétaires"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                        <span className="whitespace-nowrap">Tout réduire</span>
+                      </button>
+                    </div>
+
                     {/* Sélecteur d'éléments par page */}
                     <div className="flex items-center space-x-2">
                       <label className="text-sm text-gray-600 whitespace-nowrap">Lignes par page:</label>
@@ -1604,7 +1626,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                 )}
                             </tr>
                         </thead>
-                        <tbody className="divide-y divide-gray-200">
+                        <tbody className="divide-y divide-gray-200 dark:divide-slate-700">
                             {paginatedBudgetLines.map(budgetLine => {
                                 const lineSubBudgetLines = filteredSubBudgetLines.filter(sub => sub.budgetLineId === budgetLine.id);
                                 const isExpanded = expandedBudgetLines.has(budgetLine.id);
@@ -1615,7 +1637,13 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
 
                                 return (
                                   <React.Fragment key={budgetLine.id}>
-                                    <tr className={`hover:bg-gray-50 ${isModified ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''} ${isUnderNotified ? 'bg-yellow-50' : ''}`}>
+                                    <tr className={`transition-colors border-l-4 font-semibold ${
+                                      isModified
+                                        ? 'bg-blue-100 dark:bg-blue-950/50 border-l-blue-500'
+                                        : isUnderNotified
+                                        ? 'bg-yellow-100/80 dark:bg-yellow-900/30 border-l-yellow-500'
+                                        : 'bg-indigo-100/80 dark:bg-indigo-900/40 border-l-indigo-500'
+                                    } hover:bg-indigo-200/70 dark:hover:bg-indigo-900/60`}>
                                       <td className="px-4 py-4">
                                         <button
                                           onClick={() => toggleBudgetLineExpansion(budgetLine.id)}
@@ -1723,7 +1751,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                     {isExpanded && (
                                       <tr>
                                         <td colSpan={8} className="p-0">
-                                          <div className="bg-gray-50 border-t border-gray-200">
+                                          <div className="bg-gray-50 dark:bg-slate-900/60 border-t border-gray-200 dark:border-slate-700">
                                             {lineSubBudgetLines.length === 0 ? (
                                               <div className="p-6 text-center">
                                                 <p className="text-gray-500 mb-4">Aucune sous-ligne budgétaire</p>
@@ -1747,7 +1775,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                             ) : (
                                               <div className="overflow-x-auto">
                                                 <table className="w-full">
-                                                  <thead className="bg-gray-100">
+                                                  <thead className="bg-gray-100 dark:bg-slate-800">
                                                     <tr>
                                                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                                                         Sous-ligne budgétaire
@@ -1768,7 +1796,7 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                                       )}
                                                     </tr>
                                                   </thead>
-                                                  <tbody className="bg-white divide-y divide-gray-200">
+                                                  <tbody className="bg-white dark:bg-slate-900 divide-y divide-gray-200 dark:divide-slate-700">
                                                     {lineSubBudgetLines.map(subLine => {
                                                       const subNotificationRate = getNotificationRate(subLine.plannedAmount, subLine.notifiedAmount);
                                                       const isSubUnderNotified = subNotificationRate < 100;
@@ -1776,7 +1804,13 @@ const BudgetPlanning: React.FC<BudgetPlanningProps> = ({
                                                       const isSubModified = modifiedSubBudgetLines.has(subLine.id);
                                                       
                                                       return (
-                                                        <tr key={subLine.id} className={`hover:bg-gray-50 ${isSubModified ? 'bg-blue-50 border-l-4 border-l-blue-500' : ''} ${isSubUnderNotified ? 'bg-yellow-50' : ''}`}>
+                                                        <tr key={subLine.id} className={`transition-colors ${
+                                                          isSubModified
+                                                            ? 'bg-blue-50 dark:bg-blue-950/40 border-l-4 border-l-blue-500'
+                                                            : isSubUnderNotified
+                                                            ? 'bg-yellow-50 dark:bg-yellow-900/20'
+                                                            : 'bg-white dark:bg-slate-900'
+                                                        } hover:bg-gray-50 dark:hover:bg-slate-800/60`}>
                                                           <td className="px-4 py-4 max-w-[300px]">
                                                             <div className="flex items-center space-x-2">
                                                               {isSubModified && (

@@ -1,0 +1,119 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word">
+<head>
+<meta charset="utf-8">
+<title>Note technique — Hébergement de la plateforme Budget Base</title>
+<style>
+  body { font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 11.5pt; color: #1f2937; line-height: 1.5; margin: 2.2cm; }
+  h1 { color: #1e3a8a; font-size: 19pt; margin-bottom: 2px; }
+  h2 { color: #1d4ed8; font-size: 14pt; border-bottom: 2px solid #dbeafe; padding-bottom: 3px; margin-top: 22px; }
+  h3 { color: #1e40af; font-size: 12pt; margin-top: 14px; margin-bottom: 4px; }
+  .sub { color: #6b7280; font-size: 11pt; margin-top: 0; }
+  .meta { color: #374151; font-size: 10.5pt; margin: 14px 0 4px; }
+  ul { margin-top: 4px; }
+  li { margin-bottom: 4px; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 9px; font-size: 10.8pt; text-align: left; vertical-align: top; }
+  th { background: #eff6ff; color: #1e3a8a; }
+  .note { background: #fffbeb; border-left: 4px solid #f59e0b; padding: 10px 14px; margin: 12px 0; }
+  .warn { background: #fef2f2; border-left: 4px solid #ef4444; padding: 10px 14px; margin: 12px 0; }
+  .ok { background: #ecfdf5; border-left: 4px solid #10b981; padding: 10px 14px; margin: 12px 0; }
+  .small { color: #6b7280; font-size: 9.5pt; }
+  hr { border: none; border-top: 1px solid #e5e7eb; margin: 18px 0; }
+</style>
+</head>
+<body>
+
+<h1>Note technique — Hébergement de la plateforme « Budget Base »</h1>
+<p class="sub">Situation de l'hébergement, sécurité des données et conditions d'utilisation</p>
+
+<p class="meta">
+<b>À l'attention de :</b> la Cellule de Coordination de la Coopération Côte d'Ivoire – Union Européenne (CCCCI-UE)<br>
+<b>Objet :</b> Mise en service temporaire de la plateforme et hébergement des données<br>
+<b>Date :</b> Abidjan, le ……… / ……… / …………
+</p>
+
+<hr>
+
+<h2>1. Contexte</h2>
+<p>
+La plateforme <b>Budget Base</b> (gestion budgétaire des subventions) est désormais opérationnelle et
+peut être utilisée dès à présent par vos équipes. La présente note explique <b>où</b> et <b>comment</b> la
+plateforme est hébergée aujourd'hui, les raisons de ces choix, ainsi que les <b>conditions</b> à respecter
+pour continuer à en bénéficier sans coût.
+</p>
+
+<h2>2. Hébergement de l'application (frontend) sur Vercel — solution temporaire</h2>
+<p>
+Votre serveur <b>Plesk</b> ayant connu une défaillance, nous avons déployé la partie visible de
+l'application (le « frontend ») sur <b>Vercel</b>, une plateforme d'hébergement professionnelle et
+<b>gratuite</b> pour ce type d'usage.
+</p>
+<ul>
+  <li><b>Disponibilité immédiate :</b> vos équipes peuvent utiliser la plateforme <b>sans interruption</b>,
+      le temps que votre serveur soit rétabli.</li>
+  <li><b>Solution transitoire :</b> dès que votre <b>serveur Plesk sera de nouveau fonctionnel</b>, le
+      frontend pourra être <b>remis sur votre serveur</b> sans difficulté, à votre convenance.</li>
+  <li><b>Aucune perte de données :</b> ce changement d'hébergement ne concerne que l'affichage de
+      l'application ; <b>les données ne sont pas stockées sur Vercel</b> (voir section suivante).</li>
+</ul>
+
+<h2>3. Hébergement des données (backend) sur Supabase — pour plus de sécurité</h2>
+<p>
+La partie « backend » (base de données et services) a été réalisée avec <b>Supabase</b>, une solution
+moderne et sécurisée reposant sur la base de données <b>PostgreSQL</b>. Les données de la plateforme
+sont ainsi <b>séparées</b> de l'application et centralisées dans un environnement dédié.
+</p>
+
+<h3>Avantages d'avoir les données sur Supabase</h3>
+<table>
+  <tr><th style="width:32%">Avantage</th><th>Bénéfice pour la CCCCI-UE</th></tr>
+  <tr><td><b>Sécurité renforcée</b></td><td>Connexions chiffrées (HTTPS/TLS), authentification intégrée et gestion des accès par utilisateur et par rôle.</td></tr>
+  <tr><td><b>Données centralisées</b></td><td>Une source unique et fiable, accessible à toute l'équipe en temps réel, quel que soit l'hébergement du frontend.</td></tr>
+  <tr><td><b>Sauvegardes automatiques</b></td><td>Copies de sécurité régulières de la base, réduisant fortement le risque de perte de données.</td></tr>
+  <tr><td><b>Indépendance du frontend</b></td><td>On peut déplacer l'application (Vercel → Plesk) <b>sans toucher aux données</b> : elles restent en place.</td></tr>
+  <tr><td><b>Base robuste (PostgreSQL)</b></td><td>Un moteur de base de données éprouvé, fiable et largement reconnu, adapté à la gestion financière.</td></tr>
+  <tr><td><b>Évolutivité</b></td><td>La solution accompagne la croissance des données et du nombre d'utilisateurs sans réarchitecture.</td></tr>
+  <tr><td><b>Maintenance simplifiée</b></td><td>Infrastructure gérée par Supabase (mises à jour, disponibilité), moins de charge pour votre informatique.</td></tr>
+</table>
+
+<h2>4. Gestion des accès à la base de données</h2>
+<div class="ok">
+Les <b>accès à la base de données</b> (administration du backend Supabase) ont été <b>confiés à
+Monsieur Fofana</b>, informaticien de la structure. Il est le point de contact technique pour toute
+opération sur la base (surveillance, sauvegardes, évolutions).
+</div>
+
+<h2>5. Coût actuel : version gratuite de Supabase</h2>
+<p>
+Le backend fonctionne actuellement sur la <b>version gratuite</b> de Supabase. <b>Aucun abonnement
+n'est nécessaire pour l'instant</b>.
+</p>
+
+<div class="note">
+<b>Condition importante à respecter :</b> pour que le projet reste actif en version gratuite, il faut
+qu'<b>au moins une personne se connecte à la plateforme une à deux fois tous les 7 jours</b>.<br>
+En effet, un projet Supabase gratuit resté <b>inactif pendant environ 7 jours</b> est automatiquement
+mis en pause ; une simple connexion périodique suffit à le maintenir actif.
+</div>
+
+<div class="warn">
+<b>À défaut</b> de cette activité régulière, il faudrait passer à la <b>version payante</b> de Supabase,
+au coût de <b>25,00 $US par mois (environ)</b>. Cette éventualité a déjà été <b>expliquée à Monsieur
+Fofana</b>.
+</div>
+
+<h2>6. En résumé</h2>
+<ul>
+  <li><b>Frontend</b> : hébergé temporairement sur <b>Vercel (gratuit)</b> → utilisable dès maintenant ;
+      retour prévu sur votre <b>serveur Plesk</b> une fois celui-ci rétabli.</li>
+  <li><b>Backend / données</b> : sur <b>Supabase</b> (sécurisé, sauvegardé, indépendant du frontend).</li>
+  <li><b>Accès base de données</b> : confiés à <b>M. Fofana</b>.</li>
+  <li><b>Coût</b> : <b>0 F</b> pour l'instant, à condition d'une connexion <b>1 à 2 fois tous les 7 jours</b> ;
+      sinon, <b>≈ 25 $US / mois</b> (version payante).</li>
+</ul>
+
+<hr>
+<p class="small">Document technique relatif à la plateforme Budget Base — Cellule de Coordination de la Coopération Côte d'Ivoire – Union Européenne.</p>
+
+</body>
+</html>

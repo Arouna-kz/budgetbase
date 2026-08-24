@@ -71,11 +71,17 @@ export class PermissionService {
         actions: ['view', 'create', 'edit', 'delete', 'sign', 'export'],
         description: 'Gestion des paiements (export PDF/Excel)'
       },
-      { 
-        module: 'treasury', 
-        label: 'Trésorerie', 
+      {
+        module: 'treasury',
+        label: 'Trésorerie',
         actions: ['view', 'create', 'edit', 'delete', 'export'],
         description: 'Gestion de la trésorerie'
+      },
+      {
+        module: 'reconciliation',
+        label: 'Rapprochement',
+        actions: ['view', 'edit', 'export'],
+        description: 'Rapprochement bancaire des décaissements (pointage, export)'
       },
       { 
         module: 'prefinancing', 

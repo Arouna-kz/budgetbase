@@ -71,7 +71,8 @@ const getRemainingAmountForPayment = (payment: Payment): number => {
 
 // Fonction pour vérifier si un paiement a des paiements partiels
 const hasPartialPayments = (payment: Payment): boolean => {
-  return payment.partialPayments && payment.partialPayments.length > 0;
+  // Un paiement est "échelonné" s'il a des versements partiels OU s'il est marqué échelonné dès le départ.
+  return !!payment.isScheduled || !!(payment.partialPayments && payment.partialPayments.length > 0);
 };
 
 // Fonction pour obtenir le statut d'un paiement (avec prise en compte des paiements partiels)
@@ -151,6 +152,8 @@ const Reports: React.FC<ReportsProps> = ({
   const [supplierSearchTerm, setSupplierSearchTerm] = useState('');
   const [supplierSortField, setSupplierSortField] = useState<SortField>('supplier');
   const [supplierSortDirection, setSupplierSortDirection] = useState<SortDirection>('asc');
+  // Filtre Mission pour le rapport fournisseurs : 'all' | 'mission' | 'non_mission'
+  const [supplierMissionFilter, setSupplierMissionFilter] = useState<'all' | 'mission' | 'non_mission'>('all');
   
   // États pour l'expansion des fournisseurs
   const [expandedSuppliers, setExpandedSuppliers] = useState<Set<string>>(new Set());
@@ -329,8 +332,14 @@ const Reports: React.FC<ReportsProps> = ({
       return supplierMap.get(normalizedName)!;
     };
 
+    // Filtre Mission : IDs des engagements "mission" et test réutilisable
+    const missionEngagementIds = new Set(filteredExpenses.filter(e => e.isMission).map(e => e.id));
+    const passesMission = (isMission: boolean) =>
+      supplierMissionFilter === 'all' || (supplierMissionFilter === 'mission' ? isMission : !isMission);
+
     filteredExpenses.forEach(engagement => {
       if (!engagement.supplier) return;
+      if (!passesMission(!!engagement.isMission)) return;
       const data = getOrCreateSupplier(engagement.supplier);
       data.engagements.push(engagement);
       data.totalEngaged += engagement.amount;
@@ -342,6 +351,7 @@ const Reports: React.FC<ReportsProps> = ({
 
     filteredPayments.forEach(payment => {
       if (!payment.supplier) return;
+      if (!passesMission(missionEngagementIds.has(payment.engagementId))) return;
       const data = getOrCreateSupplier(payment.supplier);
       data.payments.push(payment);
       
@@ -2674,15 +2684,27 @@ const Reports: React.FC<ReportsProps> = ({
 
           {/* Recherche et sélecteur de lignes */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-4">
-            <div className="relative w-full sm:w-64">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Rechercher un fournisseur..."
-                value={supplierSearchTerm}
-                onChange={(e) => setSupplierSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-              />
+            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+              <div className="relative w-full sm:w-64">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Rechercher un fournisseur..."
+                  value={supplierSearchTerm}
+                  onChange={(e) => setSupplierSearchTerm(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                />
+              </div>
+              <select
+                value={supplierMissionFilter}
+                onChange={(e) => { setSupplierMissionFilter(e.target.value as 'all' | 'mission' | 'non_mission'); setSupplierCurrentPage(1); }}
+                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+                title="Filtrer par mission"
+              >
+                <option value="all">Missions et hors-mission</option>
+                <option value="mission">Missions uniquement</option>
+                <option value="non_mission">Hors-mission uniquement</option>
+              </select>
             </div>
             <div className="flex items-center space-x-2">
               <span className="text-sm text-gray-600">Lignes par page:</span>

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Target, Users, FileText, BarChart3, CreditCard, Banknote, ArrowRightLeft,
-  DollarSign, Settings, LogOut, Menu, X, AlertTriangle, Sun, Moon, ChevronLeft, ChevronRight
+  DollarSign, Settings, LogOut, Menu, X, AlertTriangle, Sun, Moon, ChevronLeft, ChevronRight, Landmark
 } from 'lucide-react';
 import { useAuth } from './hooks/useAuth';
 import { useTheme } from './hooks/useTheme';
@@ -29,6 +29,7 @@ import PaymentManager from './components/PaymentManager';
 import PaymentForm from './components/PaymentForm';
 import PaymentDetailsView from './components/PaymentDetailsView';
 import TreasuryManager from './components/TreasuryManager';
+import ReconciliationManager from './components/ReconciliationManager';
 import PrefinancingManager from './components/PrefinancingManager';
 import EmployeeLoanManager from './components/EmployeeLoanManager';
 import Reports from './components/Reports';
@@ -205,6 +206,17 @@ const MenuItemWithTooltip = ({
           count: notificationCount,
           color: 'bg-orange-500',
           label: 'signatures'
+        }];
+      }
+      return [];
+    }
+
+    if (item.id === 'reconciliation') {
+      if (notificationCount && notificationCount > 0) {
+        return [{
+          count: notificationCount,
+          color: 'bg-amber-500',
+          label: 'non rapprochés'
         }];
       }
       return [];
@@ -443,6 +455,17 @@ function App() {
   const { notificationCount: prefinancingNotificationCount } = usePrefinancingNotifications(prefinancings, selectedGrantId);
   const { notificationCount: employeeLoanNotificationCount } = useEmployeeLoanNotifications(employeeLoans, selectedGrantId);
   const treasuryNotifications = useTreasuryNotification(payments, selectedGrantId);
+
+  // Badge « Rapprochement » : nombre de versements bancaires non encore rapprochés
+  const reconciliationPendingCount = useMemo(() => {
+    let n = 0;
+    payments
+      .filter(p => !selectedGrantId || p.grantId === selectedGrantId)
+      .forEach(p => (p.partialPayments || []).forEach(pp => {
+        if (pp.needsReconciliation && !pp.reconciled) n++;
+      }));
+    return n;
+  }, [payments, selectedGrantId]);
 
   // --- Nouveauté : notifications pour la trésorerie ---
   const userProfession = userProfile?.profession || '';
@@ -1126,6 +1149,21 @@ function App() {
       delete finalUpdates.partialPayments;
     }
 
+    // ✅ Convertir les champs camelCase restants → snake_case (noms de colonnes réels),
+    // sinon Supabase rejette la mise à jour (« column ... does not exist »).
+    const paymentFieldMap: Record<string, string> = {
+      paymentNumber: 'payment_number', grantId: 'grant_id', budgetLineId: 'budget_line_id',
+      subBudgetLineId: 'sub_budget_line_id', engagementId: 'engagement_id', paymentMethod: 'payment_method',
+      checkNumber: 'check_number', bankReference: 'bank_reference', invoiceNumber: 'invoice_number',
+      invoiceAmount: 'invoice_amount', quoteReference: 'quote_reference', deliveryNote: 'delivery_note',
+      purchaseOrderNumber: 'purchase_order_number', serviceAcceptance: 'service_acceptance',
+      controlNotes: 'control_notes', isScheduled: 'is_scheduled', needsReconciliation: 'needs_reconciliation',
+      reconciledDate: 'reconciled_date', remainingAmount: 'remaining_amount',
+    };
+    for (const [cam, snake] of Object.entries(paymentFieldMap)) {
+      if (cam in finalUpdates) { finalUpdates[snake] = finalUpdates[cam]; delete finalUpdates[cam]; }
+    }
+
     // Supprimer les champs non persistants
     delete finalUpdates.cashedDate;
 
@@ -1423,12 +1461,19 @@ function App() {
         return availableEngagementsNotification || signatureNotification;
       })()
     },
-    { 
-      id: 'treasury', 
-      label: 'Trésorerie', 
-      icon: Banknote, 
+    {
+      id: 'treasury',
+      label: 'Trésorerie',
+      icon: Banknote,
       module: 'treasury',
       notificationCount: isComptable && treasuryNotifications.total > 0 ? treasuryNotifications.total : undefined
+    },
+    {
+      id: 'reconciliation',
+      label: 'Rapprochement',
+      icon: Landmark,
+      module: 'reconciliation',
+      notificationCount: isComptable && reconciliationPendingCount > 0 ? reconciliationPendingCount : undefined
     },
     {
       id: 'prefinancing',
@@ -1516,11 +1561,11 @@ function App() {
                   onClick={() => { if (hasModuleAccess('globalConfig')) setActiveTab('globalConfig'); }}
                   role={hasModuleAccess('globalConfig') ? 'button' : undefined}
                   className={`hidden md:flex items-center space-x-2 bg-white/10 backdrop-blur-sm px-3 py-1 rounded-xl border border-white/20 group relative transition-colors ${hasModuleAccess('globalConfig') ? 'cursor-pointer hover:bg-white/20' : ''}`}
-                  title={hasModuleAccess('globalConfig') ? `Subvention active : ${selectedGrant.name} — cliquez pour changer de subvention` : `Subvention active : ${selectedGrant.name}`}
+                  title={hasModuleAccess('globalConfig') ? `Subvention en cours : ${selectedGrant.name} — cliquez pour changer de subvention` : `Subvention en cours : ${selectedGrant.name}`}
                 >
                   <Banknote className="w-4 h-4 text-indigo-200 flex-shrink-0" />
                   <div className="max-w-[180px]">
-                    <p className="text-xs text-indigo-200 font-medium truncate">Subvention Active</p>
+                    <p className="text-xs text-indigo-200 font-medium truncate">Subvention en cours</p>
                     <p className="text-xs font-semibold text-white truncate">
                       {selectedGrant.name.length > 25 ? `${selectedGrant.name.substring(0, 25)}...` : selectedGrant.name}
                     </p>
@@ -1697,7 +1742,7 @@ function App() {
 
         {/* Contenu principal */}
         <div className="flex-1 min-w-0 xl:ml-0">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className={`${isSidebarCollapsed ? 'max-w-none' : 'max-w-7xl'} mx-auto px-4 sm:px-6 lg:px-8 py-8 transition-all duration-300`}>
             {activeTab === 'dashboard' && (
               <Dashboard
                 grants={[selectedGrant].filter(Boolean) as Grant[]}
@@ -1810,6 +1855,14 @@ function App() {
                 onUpdateGrant={handleUpdateGrant}
                 onUpdatePayment={handleUpdatePayment}
                 onAddPartialPayment={handleAddPartialPayment}
+              />
+            )}
+
+            {activeTab === 'reconciliation' && (
+              <ReconciliationManager
+                payments={filteredData.payments}
+                selectedGrant={selectedGrant}
+                onUpdatePayment={handleUpdatePayment}
               />
             )}
 

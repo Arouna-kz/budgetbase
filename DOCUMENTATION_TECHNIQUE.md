@@ -1,7 +1,23 @@
 # Documentation Technique - BudgetBase
 ## Plateforme de Gestion Budgétaire
 
-### Version 1.0 - Architecture et Implémentation
+### Version 1.1 - Architecture et Implémentation
+
+---
+
+## Évolutions récentes (v1.1)
+
+Principales fonctionnalités ajoutées depuis la v1.0 :
+
+- **Module « Rapprochement bancaire »** (menu dédié + permission `reconciliation`) : pointage manuel des versements bancaires **et import assisté d'un relevé** (Excel/CSV) avec mapping des colonnes et correspondance montant/référence/date ; prise en compte des **échéances des paiements échelonnés**.
+- **Paiements échelonnés dès le départ** : indicateur `is_scheduled` (case au formulaire) ; un échelonné approuvé apparaît dans l'onglet « En cours » de la Trésorerie.
+- **Engagements « Mission »** : indicateur `is_mission` (case au formulaire) + filtrage dédié ; distinction Mission / hors-mission dans les rapports fournisseurs.
+- **Attente de rapprochement** par versement (`needs_reconciliation`, `reconciled`, `reconciled_date`) ; les décaissements en **espèces** sont exclus.
+- **Suivi budgétaire hiérarchique** : tableau « Exécution budgétaire par ligne » (lignes dépliables → sous-lignes) avec totaux cumulés, développer/réduire, **tri périodique** (mouvements filtrés par plage de dates), et couleurs distinctes selon le thème.
+- **Exports comptables** (FEC, journal, grand livre, balance) et **exports Excel/PDF stylés** groupés par rubrique (ligne budgétaire), avec totaux par colonne.
+- **UX** : écran de chargement professionnel, sidebar réductible élargissant le contenu, badges de notification (Trésorerie/Rapprochement réservés au comptable).
+
+> Les colonnes de base de données correspondantes sont incluses dans `INSTALLATION_SUPABASE.sql` (nouvelle base) et dans `MIGRATIONS_A_EXECUTER.sql` (base existante).
 
 ---
 
@@ -265,6 +281,7 @@ CREATE TABLE public.engagements (
     invoice_number TEXT,
     date TIMESTAMPTZ NOT NULL,
     status TEXT NOT NULL,
+    is_mission BOOLEAN NOT NULL DEFAULT false,   -- v1.1 : engagement lié à une mission
     approvals JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -297,6 +314,12 @@ CREATE TABLE public.payments (
     status TEXT NOT NULL,
     cashed_date TIMESTAMPTZ,
     approvals JSONB,
+    partial_payments JSONB NOT NULL DEFAULT '[]'::jsonb, -- versements échelonnés (dont mode/référence/rapprochement de chaque versement)
+    remaining_amount NUMERIC NOT NULL DEFAULT 0,         -- reste à payer d'un échelonné
+    is_scheduled BOOLEAN NOT NULL DEFAULT false,         -- v1.1 : paiement marqué échelonné dès la création
+    needs_reconciliation BOOLEAN NOT NULL DEFAULT false, -- v1.1 : ce décaissement attend un rapprochement bancaire
+    reconciled BOOLEAN NOT NULL DEFAULT false,           -- v1.1 : rapproché (tous les versements bancaires pointés)
+    reconciled_date TIMESTAMPTZ,                         -- v1.1 : date du rapprochement
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -474,6 +497,7 @@ VALUES (
     {"module": "engagements", "actions": ["view", "create", "edit", "delete", "sign"]},
     {"module": "payments", "actions": ["view", "create", "edit", "delete", "sign"]},
     {"module": "treasury", "actions": ["view", "create", "edit", "delete", "export"]},
+    {"module": "reconciliation", "actions": ["view", "edit", "export"]},
     {"module": "prefinancing", "actions": ["view", "create", "edit", "delete", "sign"]},
     {"module": "employee_loans", "actions": ["view", "create", "edit", "delete", "sign"]},
     {"module": "reports", "actions": ["view", "create", "export"]},
@@ -901,6 +925,22 @@ const FormComponent: React.FC = () => {
 
 ## Déploiement
 
+### Hébergement actuel (production)
+
+L'architecture est **découplée** : l'application (frontend) et les données (backend) sont hébergées séparément.
+
+| Couche | Hébergement actuel | Statut |
+|--------|--------------------|--------|
+| **Frontend** (React/Vite) | **Vercel** (offre gratuite) | **Temporaire** — le serveur **Plesk** de la structure ayant connu une défaillance. Le frontend pourra être **remis sur le serveur Plesk** une fois celui-ci rétabli, sans impact sur les données. |
+| **Backend** (base de données + API) | **Supabase** (PostgreSQL managé) | Stable — données centralisées, sécurisées (TLS), sauvegardées automatiquement, **indépendantes du frontend**. |
+
+**Points importants :**
+
+- **Migration frontend Vercel → Plesk** : possible à tout moment ; il suffit de rebâtir (`npm run build`) et de servir `dist/` depuis Plesk avec les mêmes variables d'environnement. **Les données restent sur Supabase**, aucune migration de données n'est nécessaire.
+- **Accès à la base de données** : l'administration du backend Supabase est **confiée à M. Fofana** (informaticien de la structure) — point de contact technique pour la surveillance, les sauvegardes et les évolutions.
+- **Coût — version gratuite Supabase** : aucun abonnement requis pour l'instant. **Condition** : un projet Supabase gratuit resté **inactif ~7 jours** est mis en pause ; il faut donc **au moins une connexion 1 à 2 fois tous les 7 jours** pour le maintenir actif. À défaut, passage à la **version payante (~25 $US/mois)**.
+- **Mise en place d'une base vierge** : voir `INSTALLATION_SUPABASE.sql` (schéma complet + rôles) et `GUIDE_INSTALLATION_SUPABASE.md` (procédure pas-à-pas jusqu'au 1er utilisateur). Note d'information destinée à la structure : `NOTE_HEBERGEMENT_BUDGETBASE.doc`.
+
 ### Configuration de Production
 
 #### Variables d'Environnement
@@ -912,7 +952,7 @@ VITE_SUPABASE_ANON_KEY=your-anon-key
 
 # Application
 VITE_APP_NAME=BudgetBase
-VITE_APP_VERSION=1.0.0
+VITE_APP_VERSION=1.1.0
 ```
 
 #### Build de Production

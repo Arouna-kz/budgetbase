@@ -79,6 +79,9 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
   
   // États pour les filtres
   const [dateFilter, setDateFilter] = useState<string>('');
+  // Tri périodique des transactions (plage Du → Au)
+  const [txDateFrom, setTxDateFrom] = useState<string>('');
+  const [txDateTo, setTxDateTo] = useState<string>('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [descriptionFilter, setDescriptionFilter] = useState<string>('');
   
@@ -138,6 +141,10 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
     reference: '',
     description: ''
   });
+
+  // Rapprochement bancaire : le décaissement attend-il un rapprochement ? (défaut : oui)
+  const [partialNeedsReconciliation, setPartialNeedsReconciliation] = useState(true);
+  const [fullNeedsReconciliation, setFullNeedsReconciliation] = useState(true);
 
   // Mettre à jour grantId quand selectedGrant change
   useEffect(() => {
@@ -201,10 +208,11 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
 
   // Calcul des paiements pour chaque onglet
   const approvedPayments = useMemo(() => {
-    return payments.filter(p => 
+    return payments.filter(p =>
       p.grantId === selectedGrant?.id &&
       p.status === 'approved' &&
-      !hasPartialPayments(p)
+      !hasPartialPayments(p) &&
+      !p.isScheduled              // ✅ une fiche marquée "échelonnée" va dans l'onglet "En cours"
     );
   }, [payments, selectedGrant]);
 
@@ -214,6 +222,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       if (p.status === 'rejected' || p.status === 'paid') return false;
       // Soit le statut est in_progress, soit il est approved et a des paiements partiels avec reste > 0
       if (p.status === 'in_progress') return true;
+      // ✅ Échelonné dès le départ : dès qu'il est approuvé, il apparaît en "En cours"
+      if (p.status === 'approved' && p.isScheduled) return true;
       if (p.status === 'approved' && hasPartialPayments(p) && getRemainingAmount(p) > 0) return true;
       return false;
     });
@@ -221,6 +231,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
 
   // Pour l'affichage selon l'onglet
   const displayedPayments = paymentTab === 'approved' ? approvedPayments : inProgressPayments;
+
+  // Le rapprochement bancaire est désormais géré dans le menu dédié (ReconciliationManager).
 
   // ============================================
   // OUVERTURE DES FORMULAIRES
@@ -337,7 +349,9 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       paymentMethod: partialPaymentFormData.paymentMethod,
       checkNumber: partialPaymentFormData.paymentMethod === 'check' ? partialPaymentFormData.checkNumber : undefined,
       bankReference: partialPaymentFormData.paymentMethod === 'transfer' ? partialPaymentFormData.bankReference : undefined,
-      reference: partialPaymentFormData.reference
+      reference: partialPaymentFormData.reference,
+      needsReconciliation: partialPaymentFormData.paymentMethod === 'cash' ? false : partialNeedsReconciliation,
+      reconciled: false
     };
 
     // Construire le nouveau tableau de paiements partiels
@@ -370,7 +384,12 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       description: partialPaymentFormData.description || `Paiement partiel - ${selectedPayment.paymentNumber}`,
       amount: amount,
       type: 'debit' as 'debit',
-      reference: partialPaymentFormData.reference,
+      // Référence bancaire réelle (n° chèque / réf. virement) plutôt que la référence interne auto
+      reference: partialPaymentFormData.paymentMethod === 'check'
+        ? (partialPaymentFormData.checkNumber || partialPaymentFormData.reference)
+        : partialPaymentFormData.paymentMethod === 'transfer'
+        ? (partialPaymentFormData.bankReference || partialPaymentFormData.reference)
+        : partialPaymentFormData.reference,
       paymentId: selectedPayment.id
     };
     onAddBankTransaction(transactionData);
@@ -410,7 +429,9 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       paymentMethod: selectedPayment.paymentMethod || 'transfer',
       checkNumber: selectedPayment.paymentMethod === 'check' ? selectedPayment.checkNumber : undefined,
       bankReference: selectedPayment.paymentMethod === 'transfer' ? selectedPayment.bankReference : undefined,
-      reference: fullPaymentFormData.reference
+      reference: fullPaymentFormData.reference,
+      needsReconciliation: selectedPayment.paymentMethod === 'cash' ? false : fullNeedsReconciliation,
+      reconciled: false
     };
 
     const updatedPartialPayments = [
@@ -423,6 +444,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       onUpdatePayment(selectedPayment.id, {
         status: 'paid',
         partialPayments: updatedPartialPayments,
+        needsReconciliation: selectedPayment.paymentMethod === 'cash' ? false : fullNeedsReconciliation,
+        reconciled: false,
         // NE PAS envoyer cashedDate
       });
     }
@@ -434,7 +457,12 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
       description: fullPaymentFormData.description || `Décaissement - ${selectedPayment.paymentNumber}`,
       amount: amount,
       type: 'debit' as 'debit',
-      reference: fullPaymentFormData.reference,
+      // Référence bancaire réelle (n° chèque / réf. virement) si disponible
+      reference: selectedPayment.paymentMethod === 'check'
+        ? (selectedPayment.checkNumber || fullPaymentFormData.reference)
+        : selectedPayment.paymentMethod === 'transfer'
+        ? (selectedPayment.bankReference || fullPaymentFormData.reference)
+        : fullPaymentFormData.reference,
       paymentId: selectedPayment.id
     };
     onAddBankTransaction(transactionData);
@@ -500,6 +528,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
     });
     setSelectedPayment(null);
     setShowPartialPaymentForm(false);
+    setPartialNeedsReconciliation(true);
   };
 
   const resetFullPaymentForm = () => {
@@ -510,6 +539,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
     });
     setSelectedPayment(null);
     setShowTransactionForm(false);
+    setFullNeedsReconciliation(true);
   };
 
   const resetTransactionForm = () => {
@@ -589,11 +619,11 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
 
   const filterTransactions = (transactions: BankTransaction[]) => {
     return transactions.filter(transaction => {
-      if (dateFilter) {
-        const transactionDate = new Date(transaction.date).toISOString().split('T')[0];
-        if (transactionDate !== dateFilter) return false;
-      }
-      
+      const transactionDate = new Date(transaction.date).toISOString().split('T')[0];
+      // Tri périodique : plage Du → Au
+      if (txDateFrom && transactionDate < txDateFrom) return false;
+      if (txDateTo && transactionDate > txDateTo) return false;
+
       if (typeFilter !== 'all' && transaction.type !== typeFilter) {
         return false;
       }
@@ -651,6 +681,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
 
   const resetFilters = () => {
     setDateFilter('');
+    setTxDateFrom('');
+    setTxDateTo('');
     setTypeFilter('all');
     setDescriptionFilter('');
     setCurrentPage(1);
@@ -1442,7 +1474,7 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                       <Filter className="w-4 h-4 mr-2" />
                       Filtres des transactions
                     </h5>
-                    {(dateFilter || typeFilter !== 'all' || descriptionFilter) && (
+                    {(txDateFrom || txDateTo || typeFilter !== 'all' || descriptionFilter) && (
                       <button
                         onClick={resetFilters}
                         className="text-sm text-red-600 hover:text-red-800 flex items-center"
@@ -1453,20 +1485,33 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                     )}
                   </div>
                   
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div>
-                      <label className="block text-xs font-medium text-gray-600 mb-1">Date</label>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Du</label>
                       <input
                         type="date"
-                        value={dateFilter}
+                        value={txDateFrom}
                         onChange={(e) => {
-                          setDateFilter(e.target.value);
+                          setTxDateFrom(e.target.value);
                           setCurrentPage(1);
                         }}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                       />
                     </div>
-                    
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Au</label>
+                      <input
+                        type="date"
+                        value={txDateTo}
+                        onChange={(e) => {
+                          setTxDateTo(e.target.value);
+                          setCurrentPage(1);
+                        }}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                      />
+                    </div>
+
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">Type</label>
                       <select
@@ -1804,6 +1849,8 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
         </div>
       </div>
 
+      {/* La section « Rapprochement bancaire » a été déplacée dans le menu dédié (ReconciliationManager). */}
+
       {/* ============================================ */}
       {/* MODAL - PAIEMENT ÉCHELONNÉ (AVEC CHOIX DU MODE) */}
       {/* ============================================ */}
@@ -2014,10 +2061,12 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                 </label>
                 <select
                   value={partialPaymentFormData.paymentMethod}
-                  onChange={(e) => setPartialPaymentFormData(prev => ({ 
-                    ...prev, 
-                    paymentMethod: e.target.value as 'transfer' | 'check' | 'cash' 
-                  }))}
+                  onChange={(e) => {
+                    const method = e.target.value as 'transfer' | 'check' | 'cash';
+                    setPartialPaymentFormData(prev => ({ ...prev, paymentMethod: method }));
+                    // Espèces : pas de rapprochement bancaire ; virement/chèque : coché par défaut
+                    setPartialNeedsReconciliation(method !== 'cash');
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                   required
                 >
@@ -2092,6 +2141,25 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                   placeholder="Description de ce paiement partiel..."
                 />
               </div>
+
+              {/* Rapprochement bancaire (non applicable en espèces) */}
+              <label className="flex items-start gap-2 cursor-pointer select-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={partialPaymentFormData.paymentMethod !== 'cash' && partialNeedsReconciliation}
+                  disabled={partialPaymentFormData.paymentMethod === 'cash'}
+                  onChange={(e) => setPartialNeedsReconciliation(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500 disabled:opacity-50"
+                />
+                <span className="text-sm text-gray-700">
+                  Ce versement <span className="font-semibold">attend un rapprochement bancaire</span>
+                  {partialPaymentFormData.paymentMethod === 'cash' ? (
+                    <span className="block text-xs text-amber-600">Non applicable : un paiement en espèces ne fait pas l'objet d'un rapprochement bancaire.</span>
+                  ) : (
+                    <span className="block text-xs text-gray-500">Décochez si ce versement ne nécessite pas de rapprochement.</span>
+                  )}
+                </span>
+              </label>
 
               <div className="flex flex-col sm:flex-row gap-3 pt-4">
                 <button
@@ -2206,6 +2274,25 @@ const TreasuryManager: React.FC<TreasuryManagerProps> = ({
                   placeholder="Description du décaissement..."
                 />
               </div>
+
+              {/* Rapprochement bancaire (non applicable en espèces) */}
+              <label className="flex items-start gap-2 cursor-pointer select-none rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={selectedPayment.paymentMethod !== 'cash' && fullNeedsReconciliation}
+                  disabled={selectedPayment.paymentMethod === 'cash'}
+                  onChange={(e) => setFullNeedsReconciliation(e.target.checked)}
+                  className="mt-0.5 w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500 disabled:opacity-50"
+                />
+                <span className="text-sm text-gray-700">
+                  Ce décaissement <span className="font-semibold">attend un rapprochement bancaire</span>
+                  {selectedPayment.paymentMethod === 'cash' ? (
+                    <span className="block text-xs text-amber-600">Non applicable : un paiement en espèces ne fait pas l'objet d'un rapprochement bancaire.</span>
+                  ) : (
+                    <span className="block text-xs text-gray-500">Décochez si ce paiement ne nécessite pas de rapprochement.</span>
+                  )}
+                </span>
+              </label>
 
               <div className="flex flex-col sm:flex-row gap-3 pt-4">
                 <button

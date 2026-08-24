@@ -1,0 +1,114 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<title>Le rapprochement bancaire — Guide</title>
+<style>
+  body { font-family: 'Calibri', 'Segoe UI', Arial, sans-serif; font-size: 11pt; color: #1f2937; line-height: 1.5; }
+  h1 { color: #1e3a8a; font-size: 20pt; border-bottom: 2px solid #3b82f6; padding-bottom: 6px; }
+  h2 { color: #1d4ed8; font-size: 14pt; margin-top: 22px; }
+  h3 { color: #334155; font-size: 12pt; margin-top: 16px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  th, td { border: 1px solid #cbd5e1; padding: 6px 8px; font-size: 10.5pt; text-align: left; vertical-align: top; }
+  th { background: #dbeafe; color: #1e3a8a; }
+  .note { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 8px 12px; margin: 12px 0; }
+  .ok { background: #dcfce7; border-left: 4px solid #22c55e; padding: 8px 12px; margin: 12px 0; }
+  ul, ol { margin-top: 6px; }
+  li { margin-bottom: 4px; }
+  .small { color: #64748b; font-size: 9.5pt; }
+</style>
+</head>
+<body>
+
+<h1>Le rapprochement bancaire</h1>
+<p class="small">Guide explicatif — Plateforme de gestion budgétaire (Budget Base)</p>
+
+<h2>1. Qu'est-ce que le rapprochement bancaire ?</h2>
+<p>
+Le <b>rapprochement bancaire</b> est l'opération qui consiste à <b>comparer, ligne par ligne, les décaissements
+enregistrés dans la plateforme (votre comptabilité interne) avec les opérations réellement apparues sur le relevé
+de la banque</b>. L'objectif est de vérifier que, pour chaque paiement effectué (chèque ou virement), l'argent
+est bien sorti du compte bancaire pour le bon montant et à la bonne date.
+</p>
+<p>
+Autrement dit : on « pointe » chaque décaissement de la plateforme avec l'écriture correspondante sur le relevé
+bancaire. Quand les deux correspondent, le versement est déclaré <b>rapproché</b> (réconcilié). S'il ne correspond
+pas encore (le relevé n'est pas arrivé, le chèque n'est pas encaissé, un écart existe), il reste
+<b>non rapproché</b>.
+</p>
+
+<h2>2. Pourquoi est-ce important ?</h2>
+<ul>
+  <li><b>Fiabilité des comptes</b> : garantir que le solde affiché dans la plateforme reflète le solde réel du compte en banque.</li>
+  <li><b>Détection des erreurs</b> : repérer un montant saisi à tort, un double décaissement, une opération oubliée ou une différence de date.</li>
+  <li><b>Détection des fraudes</b> : mettre en évidence un décaissement qui n'a pas de contrepartie sur le relevé bancaire.</li>
+  <li><b>Suivi des chèques non encaissés</b> : savoir quels chèques émis n'ont pas encore été débités par la banque.</li>
+  <li><b>Justification aux bailleurs / auditeurs</b> : prouver, pièce à l'appui, que chaque dépense a bien été payée. C'est une exigence de contrôle et d'audit.</li>
+  <li><b>Clôture périodique</b> : sécuriser les états financiers de fin de mois / de période avant de les transmettre.</li>
+</ul>
+
+<div class="note">
+<b>À retenir :</b> sans rapprochement, rien ne garantit que ce qui est écrit dans la plateforme correspond
+à ce qui s'est réellement passé sur le compte bancaire. Le rapprochement est le « filet de sécurité » du suivi de trésorerie.
+</div>
+
+<h2>3. Quels paiements sont concernés ?</h2>
+<p>
+Ce ne sont <b>pas tous</b> les décaissements qui nécessitent un rapprochement. La plateforme permet donc, sur
+chaque décaissement (paiement complet ou versement partiel d'un paiement échelonné), de cocher ou décocher la
+case <b>« Ce décaissement attend un rapprochement bancaire »</b>.
+</p>
+
+<table>
+  <tr><th>Mode de paiement</th><th>Rapprochement bancaire</th><th>Pourquoi</th></tr>
+  <tr><td>Virement bancaire</td><td><b>Oui</b> (coché par défaut)</td><td>L'opération transite par la banque : elle doit apparaître sur le relevé.</td></tr>
+  <tr><td>Chèque</td><td><b>Oui</b> (coché par défaut)</td><td>Le chèque sera encaissé puis débité : il faut pointer la sortie effective.</td></tr>
+  <tr><td>Espèces</td><td><b>Non</b> (case décochée et désactivée)</td><td>Un paiement en espèces ne transite pas par le compte bancaire : il n'y a rien à rapprocher.</td></tr>
+</table>
+
+<p class="small">
+Dans la plateforme, lorsqu'on choisit le mode <b>Espèces</b>, la case de rapprochement est automatiquement
+décochée et grisée, avec la mention « Non applicable ».
+</p>
+
+<h2>4. Comment fonctionne le rapprochement dans la plateforme ?</h2>
+<ol>
+  <li><b>À l'enregistrement du décaissement</b> (page Trésorerie, paiement complet ou partiel) : on indique le mode
+      de paiement et on laisse cochée la case « attend un rapprochement » si l'opération passe par la banque.</li>
+  <li><b>Le versement rejoint la liste de rapprochement</b> : tant qu'il n'est pas pointé, il apparaît comme
+      <b>« Non rapproché »</b>.</li>
+  <li><b>Réception du relevé bancaire</b> : le comptable compare chaque versement avec le relevé (montant, date, référence).</li>
+  <li><b>Pointage</b> : lorsque la correspondance est confirmée, on marque le versement comme <b>« Rapproché »</b>.</li>
+  <li><b>Suivi</b> : la plateforme affiche à tout moment le nombre de versements <b>rapprochés</b> et <b>non rapprochés</b>,
+      avec la possibilité de <b>filtrer sur une période</b> et d'<b>exporter la liste en Excel</b> pour l'archivage ou l'audit.</li>
+</ol>
+
+<div class="ok">
+<b>Résultat attendu :</b> à la fin de l'exercice de rapprochement, tous les décaissements « bancaires » d'une
+période sont pointés. Les éventuels écarts (chèque non encaissé, opération manquante) sont identifiés et expliqués.
+</div>
+
+<h2>5. Exemple simple</h2>
+<p>
+La plateforme enregistre un décaissement de <b>500 000 FCFA</b> par chèque n° CHQ-2026-014 daté du 10/07/2026.
+Sur le relevé bancaire de juillet, on retrouve un débit de <b>500 000 FCFA</b> le 13/07/2026 (date d'encaissement
+du chèque). Les montants correspondent : on marque le versement comme <b>rapproché</b>. La différence de date
+(émission vs encaissement) est normale pour un chèque.
+</p>
+<p>
+Si, au contraire, aucun débit de 500 000 FCFA n'apparaît sur le relevé, le versement reste <b>non rapproché</b> :
+soit le chèque n'a pas encore été présenté à la banque, soit il y a une anomalie à investiguer.
+</p>
+
+<h2>6. Bonnes pratiques</h2>
+<ul>
+  <li>Effectuer le rapprochement <b>régulièrement</b> (idéalement à chaque relevé, au minimum en fin de mois).</li>
+  <li>Ne cocher « attend un rapprochement » que pour les opérations <b>réellement bancaires</b> (virement, chèque).</li>
+  <li>Documenter et expliquer <b>chaque écart</b> avant la clôture.</li>
+  <li><b>Conserver</b> les exports Excel de rapprochement comme justificatifs pour les audits.</li>
+  <li>Ne jamais considérer une période comme clôturée tant qu'il reste des versements non rapprochés inexpliqués.</li>
+</ul>
+
+<p class="small">Document généré pour la plateforme Budget Base.</p>
+
+</body>
+</html>

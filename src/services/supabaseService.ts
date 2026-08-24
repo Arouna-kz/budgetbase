@@ -365,6 +365,7 @@ export const engagementsService = {
         invoiceNumber: engagement.invoice_number,
         date: engagement.date,
         status: engagement.status as Engagement['status'],
+        isMission: engagement.is_mission ?? false,
         approvals: engagement.approvals as Engagement['approvals']
       }));
     } catch (error) {
@@ -389,6 +390,7 @@ export const engagementsService = {
           invoice_number: engagement.invoiceNumber,
           date: engagement.date,
           status: engagement.status,
+          is_mission: engagement.isMission ?? false,
           approvals: engagement.approvals as any
         })
         .select()
@@ -409,6 +411,7 @@ export const engagementsService = {
         invoiceNumber: data.invoice_number,
         date: data.date,
         status: data.status as Engagement['status'],
+        isMission: data.is_mission ?? false,
         approvals: data.approvals as Engagement['approvals']
       };
     } catch (error) {
@@ -433,6 +436,7 @@ export const engagementsService = {
           ...(updates.invoiceNumber !== undefined && { invoice_number: updates.invoiceNumber }),
           ...(updates.date && { date: updates.date }),
           ...(updates.status && { status: updates.status }),
+          ...(updates.isMission !== undefined && { is_mission: updates.isMission }),
           ...(updates.approvals !== undefined && { approvals: updates.approvals as any }),
           updated_at: new Date().toISOString()
         })
@@ -494,8 +498,11 @@ export const paymentsService = {
         cashedDate: payment.cashed_date,
         approvals: payment.approvals as Payment['approvals'],
         partialPayments: payment.partial_payments || [],        // <-- ajout
-        remainingAmount: payment.remaining_amount || 0          // <-- ajout
-
+        remainingAmount: payment.remaining_amount || 0,          // <-- ajout
+        isScheduled: payment.is_scheduled ?? false,
+        needsReconciliation: payment.needs_reconciliation ?? false,
+        reconciled: payment.reconciled ?? false,
+        reconciledDate: payment.reconciled_date ?? undefined
       }));
     } catch (error) {
       handleSupabaseError(error);
@@ -529,6 +536,10 @@ export const paymentsService = {
           control_notes: payment.controlNotes,
           status: payment.status,
           cashed_date: payment.cashedDate,
+          is_scheduled: payment.isScheduled ?? false,
+          needs_reconciliation: payment.needsReconciliation ?? false,
+          reconciled: payment.reconciled ?? false,
+          reconciled_date: payment.reconciledDate ?? null,
           approvals: payment.approvals as any
         })
         .select()
@@ -559,6 +570,10 @@ export const paymentsService = {
         controlNotes: data.control_notes,
         status: data.status as Payment['status'],
         cashedDate: data.cashed_date,
+        isScheduled: data.is_scheduled ?? false,
+        needsReconciliation: data.needs_reconciliation ?? false,
+        reconciled: data.reconciled ?? false,
+        reconciledDate: data.reconciled_date ?? undefined,
         approvals: data.approvals as Payment['approvals']
       };
     } catch (error) {
@@ -593,6 +608,10 @@ export const paymentsService = {
           ...(updates.controlNotes !== undefined && { control_notes: updates.controlNotes }),
           ...(updates.status && { status: updates.status }),
           ...(updates.cashedDate !== undefined && { cashed_date: updates.cashedDate }),
+          ...(updates.isScheduled !== undefined && { is_scheduled: updates.isScheduled }),
+          ...(updates.needsReconciliation !== undefined && { needs_reconciliation: updates.needsReconciliation }),
+          ...(updates.reconciled !== undefined && { reconciled: updates.reconciled }),
+          ...(updates.reconciledDate !== undefined && { reconciled_date: updates.reconciledDate }),
           ...(updates.approvals !== undefined && { approvals: updates.approvals as any }),
           updated_at: new Date().toISOString()
         })

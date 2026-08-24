@@ -137,12 +137,14 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
       pdf.setFontSize(9);
       pdf.setFont('helvetica', 'normal');
       
+      const isScheduledPay = payment.isScheduled || hasPartialPayments();
       const infoRows = [
         ['Statut:', PAYMENT_STATUS[payment.status].label],
+        ['Type de règlement:', isScheduledPay ? 'Échelonné (plusieurs versements)' : 'Direct'],
         // ✅ En échelonné, chaque transaction a sa propre date dans l'historique
-        ['Date:', hasPartialPayments() ? 'Paiement échelonné (voir historique)' : new Date(payment.date).toLocaleDateString('fr-FR')],
+        ['Date:', isScheduledPay ? 'Paiement échelonné (voir historique)' : new Date(payment.date).toLocaleDateString('fr-FR')],
         ['Montant:', formatAmount(payment.amount)],
-        ['Mode de paiement:', getPaymentMethodLabel(payment.paymentMethod)],
+        ['Mode de paiement:', isScheduledPay ? 'Échelonné — mode saisi à chaque versement' : getPaymentMethodLabel(payment.paymentMethod)],
         ['Fournisseur:', payment.supplier || engagement.supplier],
         ['N° Engagement:', engagement.engagementNumber],
         ['Ligne Budgétaire:', `${budgetLine.code} - ${budgetLine.name}`],
@@ -150,10 +152,10 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
       ];
 
       // ✅ N° chèque / réf. bancaire uniquement pour un paiement direct (pas échelonné)
-      if (!hasPartialPayments() && payment.checkNumber) {
+      if (!isScheduledPay && payment.checkNumber) {
         infoRows.push(['N° Chèque:', payment.checkNumber]);
       }
-      if (!hasPartialPayments() && payment.bankReference) {
+      if (!isScheduledPay && payment.bankReference) {
         infoRows.push(['Réf. Bancaire:', payment.bankReference]);
       }
 
@@ -251,10 +253,11 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
           pdf.rect(15, yPosition, colWidths.reduce((a, b) => a + b, 0), 6, 'F');
 
           xPos = 15;
+          const ppRef = pp.paymentMethod === 'check' ? pp.checkNumber : pp.paymentMethod === 'transfer' ? pp.bankReference : '';
           const rowData = [
             new Date(pp.date).toLocaleDateString('fr-FR'),
             pp.reference || '-',
-            getPaymentMethodLabel(pp.paymentMethod),
+            `${getPaymentMethodLabel(pp.paymentMethod)}${ppRef ? ` (${ppRef})` : ''}`,
             `${pp.amount.toLocaleString('fr-FR')} ${getCurrencySymbol(grant.currency)}`
           ];
 
@@ -408,7 +411,7 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Date de Paiement</label>
-                    {hasPartialPayments() ? (
+                    {(payment.isScheduled || hasPartialPayments()) ? (
                       <p className="text-gray-500 italic text-sm">Paiement échelonné — voir l'historique</p>
                     ) : (
                       <p className="text-gray-900">{new Date(payment.date).toLocaleDateString('fr-FR')}</p>
@@ -431,10 +434,16 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Mode de Paiement</label>
-                    <p className="text-gray-900 font-medium">{getPaymentMethodLabel(payment.paymentMethod)}</p>
+                    {(payment.isScheduled || hasPartialPayments()) ? (
+                      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-700">
+                        Paiement échelonné — mode saisi à chaque versement
+                      </span>
+                    ) : (
+                      <p className="text-gray-900 font-medium">{getPaymentMethodLabel(payment.paymentMethod)}</p>
+                    )}
                   </div>
 
-                  {!hasPartialPayments() && payment.checkNumber && (
+                  {!(payment.isScheduled || hasPartialPayments()) && payment.checkNumber && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">N° de Chèque</label>
                       <p className="text-gray-900 font-medium">{payment.checkNumber}</p>
@@ -442,7 +451,7 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
                   )}
                 </div>
 
-                {!hasPartialPayments() && payment.bankReference && (
+                {!(payment.isScheduled || hasPartialPayments()) && payment.bankReference && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Référence Bancaire</label>
                     <p className="text-gray-900">{payment.bankReference}</p>
@@ -524,7 +533,7 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Référence</th>
                         <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Mode</th>
-                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">N° Chèque</th>
+                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">N° Chèque / Réf. virement</th>
                         <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Montant</th>
                       </tr>
                     </thead>
@@ -543,7 +552,11 @@ const PaymentDetailsView: React.FC<PaymentDetailsViewProps> = ({
                               {getPaymentMethodLabel(pp.paymentMethod)}
                             </td>
                             <td className="px-4 py-3 text-sm text-gray-600">
-                              {pp.checkNumber || '-'}
+                              {pp.paymentMethod === 'check'
+                                ? (pp.checkNumber || '-')
+                                : pp.paymentMethod === 'transfer'
+                                ? (pp.bankReference || '-')
+                                : '-'}
                             </td>
                             <td className="px-4 py-3 text-sm font-medium text-green-600 text-right">
                               {formatAmount(pp.amount)}

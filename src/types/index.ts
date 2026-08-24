@@ -85,24 +85,26 @@ export interface Engagement {
   invoiceNumber?: string;
   date: string;
   status: 'pending' | 'approved' | 'paid' | 'rejected';
+  /** true = l'engagement concerne une mission. */
+  isMission?: boolean;
   approvals?: {
-    supervisor1?: { 
-      name: string; 
-      date: string; 
-      signature: boolean; 
-      observation?: string 
+    supervisor1?: {
+      name: string;
+      date: string;
+      signature: boolean;
+      observation?: string
     };
-    supervisor2?: { 
-      name: string; 
-      date: string; 
-      signature: boolean; 
-      observation?: string 
+    supervisor2?: {
+      name: string;
+      date: string;
+      signature: boolean;
+      observation?: string
     };
-    finalApproval?: { 
-      name: string; 
-      date: string; 
-      signature: boolean; 
-      observation?: string 
+    finalApproval?: {
+      name: string;
+      date: string;
+      signature: boolean;
+      observation?: string
     };
   };
 }
@@ -155,6 +157,15 @@ export interface Payment {
   // Nouveaux champs pour le suivi des paiements échelonnés
   partialPayments?: PartialPayment[];
   remainingAmount?: number;
+  /** true = paiement marqué "échelonné" dès sa création (avant tout paiement partiel). */
+  isScheduled?: boolean;
+  // Rapprochement bancaire (paiement direct complet)
+  /** true = ce décaissement attend un rapprochement bancaire. */
+  needsReconciliation?: boolean;
+  /** true = le rapprochement a été effectué. */
+  reconciled?: boolean;
+  /** Date du rapprochement (ISO). */
+  reconciledDate?: string;
 }
 
 
@@ -169,6 +180,10 @@ export interface PartialPayment {
   reference: string;
   cashedDate?: string;
   transactionId?: string; // Référence vers la transaction bancaire
+  // Rapprochement bancaire (par versement)
+  needsReconciliation?: boolean;
+  reconciled?: boolean;
+  reconciledDate?: string;
 }
 
 

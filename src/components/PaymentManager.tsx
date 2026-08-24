@@ -68,6 +68,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [missionFilter, setMissionFilter] = useState<'all' | 'mission' | 'non_mission'>('all');
   const [showOnlyToSign, setShowOnlyToSign] = useState(false);
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
@@ -379,11 +380,16 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     const matchesBudgetLine = !budgetLineFilter || 
       payment.budgetLineId === budgetLineFilter;
 
-    const matchesSubBudgetLine = !subBudgetLineFilter || 
+    const matchesSubBudgetLine = !subBudgetLineFilter ||
       payment.subBudgetLineId === subBudgetLineFilter;
 
+    // Mission / hors-mission : basé sur l'engagement lié au paiement
+    const isMissionPayment = !!engagement?.isMission;
+    const matchesMission = missionFilter === 'all'
+      || (missionFilter === 'mission' ? isMissionPayment : !isMissionPayment);
+
     return matchesSearch && matchesStatus && matchesToSign && matchesDateRange &&
-           matchesSupplier && matchesBudgetLine && matchesSubBudgetLine;
+           matchesSupplier && matchesBudgetLine && matchesSubBudgetLine && matchesMission;
   });
 
   // Tri
@@ -1148,6 +1154,104 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
   };
 
   // 🎯 EXPORT EXCEL
+  // 🎯 EXPORT COMPTABLE — Excel groupé par RUBRIQUE (ligne budgétaire), sous-totaux + total général
+  const exportComptableByRubrique = async () => {
+    if (!canExport) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+      return;
+    }
+    setIsGeneratingExcel(true);
+    try {
+      const data = sortedPayments;
+      if (data.length === 0) {
+        showWarning('Aucune donnée', 'Aucun paiement à exporter');
+        return;
+      }
+
+      const statusLabels: Record<string, string> = {
+        pending: 'En attente', approved: 'Approuvé', in_progress: 'En cours', paid: 'Payé', rejected: 'Rejeté'
+      };
+      const currencySymbol = getCurrencySymbol(activeGrant?.currency || 'EUR');
+      const fmt = (n: number) => `${n.toLocaleString('fr-FR')} ${currencySymbol}`;
+
+      const infoLines: string[] = [];
+      if (activeGrant) {
+        infoLines.push(`Subvention : ${activeGrant.name}`);
+        infoLines.push(`Référence : ${activeGrant.reference}   •   Devise : ${activeGrant.currency}`);
+      }
+      infoLines.push(`Généré le : ${new Date().toLocaleDateString('fr-FR')}`);
+
+      // Regroupement par rubrique = ligne budgétaire
+      const groups = new Map<string, { label: string; payments: Payment[] }>();
+      for (const p of data) {
+        const key = p.budgetLineId || '__none__';
+        if (!groups.has(key)) {
+          const bl = getBudgetLine(p.budgetLineId);
+          groups.set(key, { label: bl ? `${bl.code} - ${bl.name}` : 'Ligne inconnue', payments: [] });
+        }
+        groups.get(key)!.payments.push(p);
+      }
+
+      const rows: (string | number)[][] = [];
+      const rowKinds: Array<'group' | 'sub'> = [];
+      let gAmount = 0, gPaid = 0, gRemaining = 0;
+
+      for (const g of groups.values()) {
+        const sAmount = g.payments.reduce((s, p) => s + p.amount, 0);
+        const sPaid = g.payments.reduce((s, p) => s + getTotalPaid(p), 0);
+        const sRemaining = g.payments.reduce((s, p) => s + getRemainingAmount(p), 0);
+        gAmount += sAmount; gPaid += sPaid; gRemaining += sRemaining;
+        rows.push([g.label, '', '', '', '', fmt(sAmount), fmt(sPaid), fmt(sRemaining), '']);
+        rowKinds.push('group');
+        for (const p of g.payments) {
+          const sub = getSubBudgetLine(p.subBudgetLineId);
+          rows.push([
+            p.paymentNumber,
+            new Date(p.date).toLocaleDateString('fr-FR'),
+            sub ? `${sub.code} - ${sub.name}` : 'N/A',
+            p.supplier || 'Non spécifié',
+            p.description || '',
+            fmt(p.amount),
+            fmt(getTotalPaid(p)),
+            fmt(getRemainingAmount(p)),
+            statusLabels[p.status] || p.status,
+          ]);
+          rowKinds.push('sub');
+        }
+      }
+
+      const totalsRow = ['TOTAL GÉNÉRAL', '', '', '', '', fmt(gAmount), fmt(gPaid), fmt(gRemaining), ''];
+
+      exportStyledExcel({
+        fileName: `paiements-comptable-${activeGrant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.xlsx`,
+        sheetName: 'Paiements par rubrique',
+        title: 'PAIEMENTS PAR RUBRIQUE (LIGNE BUDGÉTAIRE)',
+        infoLines,
+        columns: [
+          { header: 'N° Paiement / Rubrique', width: 28 },
+          { header: 'Date', width: 14, align: 'center' },
+          { header: 'Sous-ligne', width: 32 },
+          { header: 'Fournisseur', width: 24 },
+          { header: 'Description', width: 40 },
+          { header: 'Montant', width: 18, align: 'right' },
+          { header: 'Payé', width: 18, align: 'right' },
+          { header: 'Reste', width: 18, align: 'right' },
+          { header: 'Statut', width: 14, align: 'center' },
+        ],
+        rows,
+        rowKinds,
+        totalsRow,
+      });
+
+      showSuccess('Export réussi', 'Le fichier comptable (par rubrique) a été généré');
+    } catch (error) {
+      console.error('Erreur export comptable:', error);
+      showError('Erreur', 'Impossible de générer le fichier comptable');
+    } finally {
+      setIsGeneratingExcel(false);
+    }
+  };
+
   const exportToExcel = async (exportAllData: boolean = false) => {
     if (!canExport) {
       showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
@@ -1155,7 +1259,7 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
     }
 
     setIsGeneratingExcel(true);
-    
+
     try {
       const dataToExport = exportAllData ? sortedPayments : currentPayments;
       
@@ -1338,6 +1442,19 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
 
           <div>
             <select
+              value={missionFilter}
+              onChange={(e) => setMissionFilter(e.target.value as 'all' | 'mission' | 'non_mission')}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+              title="Filtrer les paiements de mission (selon l'engagement lié)"
+            >
+              <option value="all">Missions et hors-mission</option>
+              <option value="mission">Missions uniquement</option>
+              <option value="non_mission">Hors-mission uniquement</option>
+            </select>
+          </div>
+
+          <div>
+            <select
               value={budgetLineFilter}
               onChange={(e) => setBudgetLineFilter(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
@@ -1417,11 +1534,12 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mt-3">
           <div className="flex items-center space-x-4 text-sm text-gray-600">
             <span>{sortedPayments.length} paiement(s) trouvé(s)</span>
-            {(searchTerm || statusFilter !== 'all' || showOnlyToSign || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate) && (
+            {(searchTerm || statusFilter !== 'all' || missionFilter !== 'all' || showOnlyToSign || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate) && (
               <button
                 onClick={() => {
                   setSearchTerm('');
                   setStatusFilter('all');
+                  setMissionFilter('all');
                   setShowOnlyToSign(false);
                   setSupplierFilter('');
                   setBudgetLineFilter('');
@@ -1630,6 +1748,15 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
             <FileSpreadsheet className="w-4 h-4" />
             <span>Excel Complet</span>
           </button>
+          <button
+            onClick={exportComptableByRubrique}
+            disabled={isGeneratingExcel}
+            className="bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-emerald-800 flex items-center gap-1 disabled:opacity-50"
+            title="Export Excel groupé par rubrique (ligne budgétaire) avec sous-totaux"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Export comptable</span>
+          </button>
         </div>
       )}
 
@@ -1664,13 +1791,13 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
               <CreditCard className="w-8 h-8 text-gray-400" />
             </div>
             <h3 className="text-lg font-medium text-gray-900 mb-2">
-              {searchTerm || statusFilter !== 'all' || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate 
+              {searchTerm || statusFilter !== 'all' || missionFilter !== 'all' || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate
                 ? 'Aucun paiement ne correspond aux critères de recherche' 
                 : selectedGrantId ? 'Aucun paiement pour cette subvention' : 'Aucun paiement'
               }
             </h3>
             <p className="text-gray-500">
-              {searchTerm || statusFilter !== 'all' || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate
+              {searchTerm || statusFilter !== 'all' || missionFilter !== 'all' || supplierFilter || budgetLineFilter || subBudgetLineFilter || startDate || endDate
                 ? 'Essayez de modifier vos critères de recherche'
                 : selectedGrantId ? 'Aucun paiement n\'a été créé pour cette subvention' : 'Les paiements apparaîtront ici une fois créés'
               }
@@ -1772,10 +1899,19 @@ const PaymentManager: React.FC<PaymentManagerProps> = ({
                                 {payment.paymentNumber}
                               </div>
                               <div className="text-xs text-gray-400">
-                                {payment.paymentMethod === 'check' ? 'Chèque' : 
-                                payment.paymentMethod === 'transfer' ? 'Virement' : 'Espèces'}
-                                {payment.checkNumber && ` N°${payment.checkNumber}`}
+                                {payment.isScheduled ? 'Paiement échelonné' : (
+                                  <>
+                                    {payment.paymentMethod === 'check' ? 'Chèque' :
+                                    payment.paymentMethod === 'transfer' ? 'Virement' : 'Espèces'}
+                                    {payment.checkNumber && ` N°${payment.checkNumber}`}
+                                  </>
+                                )}
                               </div>
+                              {payment.isScheduled && !hasPartials && (
+                                <span className="mt-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700">
+                                  Échelonné
+                                </span>
+                              )}
                               {hasPartials && (
                                 <div className="text-xs text-purple-600 mt-1">
                                   {payment.partialPayments?.length || 0} paiement{payment.partialPayments?.length > 1 ? 's' : ''} partiel{payment.partialPayments?.length > 1 ? 's' : ''}

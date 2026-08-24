@@ -8,20 +8,21 @@ export const useTreasuryNotification = (payments: Payment[], selectedGrantId: st
       ? payments.filter(p => p.grantId === selectedGrantId)
       : payments;
 
-    // Paiements approuvés sans aucun paiement partiel
+    // Paiements approuvés à décaisser (directs) : hors échelonnés et sans versement partiel
     const approvedUncashed = filtered.filter(p =>
       p.status === 'approved' &&
+      !p.isScheduled &&
       (!p.partialPayments || p.partialPayments.length === 0) &&
       p.amount > 0
     );
 
-    // Paiements en cours (partiellement payés) avec reste à payer
-    const inProgress = filtered.filter(p =>
-      (p.status === 'approved' || p.status === 'in_progress') &&
-      p.partialPayments &&
-      p.partialPayments.length > 0 &&
-      (p.amount - p.partialPayments.reduce((sum, pp) => sum + pp.amount, 0)) > 0
-    );
+    // Paiements « en cours » (échelonnés) avec reste à payer : marqués échelonnés OU déjà partiellement payés
+    const inProgress = filtered.filter(p => {
+      const paid = (p.partialPayments || []).reduce((sum, pp) => sum + pp.amount, 0);
+      const remaining = p.amount - paid;
+      const isEchelonne = p.isScheduled || (p.partialPayments && p.partialPayments.length > 0);
+      return (p.status === 'approved' || p.status === 'in_progress') && isEchelonne && remaining > 0;
+    });
 
     const total = approvedUncashed.length + inProgress.length;
 

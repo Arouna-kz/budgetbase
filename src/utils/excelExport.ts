@@ -33,6 +33,13 @@ export interface StyledExcelOptions {
   totalsRow?: CellValue[];
   /** Couleur de fond de l'en-tête (hex sans #). Défaut : bleu. */
   headerColor?: string;
+  /**
+   * Type de chaque ligne de `rows` (aligné sur `rows`), pour un rendu hiérarchique :
+   * - `'group'` : ligne budgétaire (cumul) — fond bleu clair, gras.
+   * - `'sub'`   : sous-ligne — fond blanc, 1ère colonne indentée.
+   * - `undefined`/`'data'` : ligne normale avec alternance de couleur.
+   */
+  rowKinds?: Array<'group' | 'sub' | 'data'>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -104,12 +111,32 @@ export function dataCellStyle(rowIndex: number, align: Align = 'left') {
   };
 }
 
+/** Style d'une ligne "groupe" (ligne budgétaire cumulée) — fond bleu clair, gras. */
+export function groupRowStyle(align: Align = 'left') {
+  return {
+    font: { bold: true, sz: 10, color: { rgb: EXCEL_COLORS.title } },
+    fill: { fgColor: { rgb: EXCEL_COLORS.sectionHeader } },
+    alignment: { horizontal: align, vertical: 'center', wrapText: true },
+    border: thinBorder,
+  };
+}
+
+/** Style d'une sous-ligne — fond blanc, 1ère colonne indentée. */
+export function subRowStyle(align: Align = 'left', indent = false) {
+  return {
+    font: { sz: 10, color: { rgb: EXCEL_COLORS.text } },
+    fill: { fgColor: { rgb: EXCEL_COLORS.white } },
+    alignment: { horizontal: align, vertical: 'center', wrapText: true, ...(indent ? { indent: 1 } : {}) },
+    border: thinBorder,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /*  Helper haut niveau : liste simple avec en-tête + totaux            */
 /* ------------------------------------------------------------------ */
 /** Construit uniquement la feuille stylée (sans classeur) — utile pour composer un classeur multi-feuilles. */
 export function buildStyledWorksheet(options: StyledExcelOptions): XLSX.WorkSheet {
-  const { title, infoLines = [], columns, rows, totalsRow, headerColor } = options;
+  const { title, infoLines = [], columns, rows, totalsRow, headerColor, rowKinds } = options;
   const colCount = columns.length;
 
   const aoa: CellValue[][] = [];
@@ -188,7 +215,15 @@ export function buildStyledWorksheet(options: StyledExcelOptions): XLSX.WorkShee
           alignment: { horizontal: columns[c]?.align ?? 'left', vertical: 'center' },
         };
       } else if (r >= firstDataRowIdx && r <= lastDataRowIdx) {
-        ws[ref].s = dataCellStyle(r - firstDataRowIdx, columns[c]?.align ?? 'left');
+        const align = columns[c]?.align ?? 'left';
+        const kind = rowKinds?.[r - firstDataRowIdx];
+        if (kind === 'group') {
+          ws[ref].s = groupRowStyle(align);
+        } else if (kind === 'sub') {
+          ws[ref].s = subRowStyle(align, c === 0);
+        } else {
+          ws[ref].s = dataCellStyle(r - firstDataRowIdx, align);
+        }
       }
     }
   }

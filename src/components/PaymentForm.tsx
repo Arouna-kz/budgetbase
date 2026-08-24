@@ -35,6 +35,8 @@ export default function PaymentForm({
   const [currentUserName, setCurrentUserName] = useState('');
   const [currentUserProfession, setCurrentUserProfession] = useState('');
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  // Empêche la double-soumission (double-clic) qui créait des fiches de paiement en doublon
+  const [isSaving, setIsSaving] = useState(false);
   const currency = grant.currency || 'EUR';
 
   // HOOKS D'AUTHENTIFICATION ET PERMISSIONS
@@ -64,6 +66,7 @@ export default function PaymentForm({
     purchaseOrderNumber: '',
     serviceAcceptance: false,
     controlNotes: '',
+    isScheduled: false,
   });
 
   const [approvals, setApprovals] = useState({
@@ -220,8 +223,9 @@ export default function PaymentForm({
         purchaseOrderNumber: editingPayment.purchaseOrderNumber || '',
         serviceAcceptance: editingPayment.serviceAcceptance || false,
         controlNotes: editingPayment.controlNotes || '',
+        isScheduled: editingPayment.isScheduled ?? false,
       });
-      
+
       if (editingPayment.approvals) {
         setApprovals({
           supervisor1: editingPayment.approvals.supervisor1 || { name: '', signature: false, observation: '' },
@@ -294,10 +298,11 @@ export default function PaymentForm({
     // Validation de la trésorerie
     const availableBalance = grant.bankAccount?.balance || 0;
     
-    // Calculer les paiements en attente d'encaissement
-    const pendingCashing = existingPayments.filter(p => 
-      p.status === 'paid' && 
-      (p.paymentMethod === 'check' || p.paymentMethod === 'transfer') && 
+    // Calculer les paiements en attente d'encaissement (UNIQUEMENT pour la subvention courante)
+    const pendingCashing = existingPayments.filter(p =>
+      p.grantId === grant.id &&
+      p.status === 'paid' &&
+      (p.paymentMethod === 'check' || p.paymentMethod === 'transfer') &&
       !p.cashedDate
     ).reduce((sum, p) => sum + p.amount, 0);
     
@@ -317,7 +322,10 @@ export default function PaymentForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    
+
+    // Garde anti double-soumission : bloque un second envoi (double-clic)
+    if (isSaving) return;
+
     if (!validateForm()) {
       return;
     }
@@ -379,17 +387,23 @@ export default function PaymentForm({
       controlNotes: formData.controlNotes || undefined,
       // ✅ Préserver le statut existant en modification ; "pending" seulement à la création
       status: editingPayment ? editingPayment.status : 'pending',
+      isScheduled: formData.isScheduled,
       approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined
     };
 
+    setIsSaving(true);
     onSave(payment);
+    // Filet de sécurité : réautoriser l'envoi si le formulaire reste ouvert (ex. échec réseau)
+    setTimeout(() => setIsSaving(false), 8000);
   };
 
   // Calculs de trésorerie
   const totalBankBalance = grant.bankAccount?.balance || 0;
-  const totalUncashedPayments = existingPayments.filter(p => 
-    p.status === 'paid' && 
-    (p.paymentMethod === 'check' || p.paymentMethod === 'transfer') && 
+  // Uniquement les paiements de la subvention courante (le solde bancaire est par subvention)
+  const totalUncashedPayments = existingPayments.filter(p =>
+    p.grantId === grant.id &&
+    p.status === 'paid' &&
+    (p.paymentMethod === 'check' || p.paymentMethod === 'transfer') &&
     !p.cashedDate
   );
   const totalUncashedAmount = totalUncashedPayments.reduce((sum, p) => sum + p.amount, 0);
@@ -599,7 +613,7 @@ export default function PaymentForm({
             <div>
               <strong>Mode de Paiement:</strong>
               <div style="border: 1px solid #ccc; padding: 8px; margin: 5px 0; border-radius: 4px; background: #fff;">
-                ${formData.paymentMethod === 'check' ? 'Chèque' : formData.paymentMethod === 'transfer' ? 'Virement' : 'Espèces'}
+                ${formData.isScheduled ? 'Paiement échelonné (mode saisi à chaque versement)' : (formData.paymentMethod === 'check' ? 'Chèque' : formData.paymentMethod === 'transfer' ? 'Virement' : 'Espèces')}
               </div>
             </div>
             ${formData.checkNumber ? `
@@ -859,7 +873,7 @@ export default function PaymentForm({
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-600">Chèques/virements non encaissés:</span>
-                  <span className="font-medium text-orange-600">-{formatAmount(totalUncashedAmount)}</span>
+                  <span className="font-medium text-orange-600">{totalUncashedAmount > 0 ? `-${formatAmount(totalUncashedAmount)}` : formatAmount(0)}</span>
                 </div>
                 <div className="flex justify-between border-t pt-2">
                   <span className="text-gray-700 font-medium">Disponible avant paiement:</span>
@@ -967,6 +981,7 @@ export default function PaymentForm({
                 </div>
               </div>
 
+              {!formData.isScheduled && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Mode de Paiement *
@@ -982,9 +997,26 @@ export default function PaymentForm({
                   <option value="cash">Espèces</option>
                 </select>
               </div>
+              )}
             </div>
 
-            {formData.paymentMethod === 'check' && (
+            {/* Case "Paiement échelonné" — disponible à la création ET en modification (pour rectifier un oubli) */}
+            <div className="mt-4">
+              <label className="inline-flex items-start gap-2 cursor-pointer select-none rounded-lg border border-purple-200 bg-purple-50 px-3 py-2">
+                <input
+                  type="checkbox"
+                  checked={formData.isScheduled}
+                  onChange={(e) => setFormData(prev => ({ ...prev, isScheduled: e.target.checked }))}
+                  className="mt-0.5 w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                />
+                <span className="text-sm text-gray-700">
+                  <span className="font-semibold text-purple-700">Paiement échelonné</span>
+                  <span className="block text-xs text-gray-500">Le règlement se fera en plusieurs versements. Le mode de paiement sera saisi à chaque versement partiel.</span>
+                </span>
+              </label>
+            </div>
+
+            {!formData.isScheduled && formData.paymentMethod === 'check' && (
               <div className="mt-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   N° de Chèque
@@ -999,7 +1031,7 @@ export default function PaymentForm({
               </div>
             )}
 
-            {formData.paymentMethod === 'transfer' && (
+            {!formData.isScheduled && formData.paymentMethod === 'transfer' && (
               <div className="mt-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Référence Bancaire
@@ -1439,20 +1471,22 @@ export default function PaymentForm({
 
             <button
               type="submit"
-              disabled={(editingPayment && !canModifyExisting) || balanceAfterPayment < 0}
+              disabled={(editingPayment && !canModifyExisting) || balanceAfterPayment < 0 || isSaving}
               className={`flex-1 px-6 py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center space-x-2 ${
-                (editingPayment && !canModifyExisting) || balanceAfterPayment < 0
+                (editingPayment && !canModifyExisting) || balanceAfterPayment < 0 || isSaving
                   ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-green-600 to-blue-600 text-white hover:shadow-lg transform hover:scale-[1.02]'
               }`}
             >
               <Save className="w-5 h-5" />
               <span>
-                {editingPayment ? (
-                  canModifyExisting
-                    ? 'Modifier le Paiement'
-                    : 'Modification réservée au comptable'
-                ) : 'Enregistrer le Paiement'}
+                {isSaving
+                  ? 'Enregistrement…'
+                  : editingPayment ? (
+                      canModifyExisting
+                        ? 'Modifier le Paiement'
+                        : 'Modification réservée au comptable'
+                    ) : 'Enregistrer le Paiement'}
               </span>
             </button>
 

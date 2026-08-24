@@ -24,6 +24,8 @@ interface SupplierSelectorProps {
   onSelectSupplier: (supplier: string) => void;
   disabled?: boolean;
   className?: string;
+  /** true = formulaire de modification : masque la confirmation "Fournisseur sélectionné" tant que l'utilisateur ne re-sélectionne pas. */
+  isEditing?: boolean;
 }
 
 const SupplierSelector = memo(({
@@ -31,8 +33,11 @@ const SupplierSelector = memo(({
   selectedSupplier,
   onSelectSupplier,
   disabled = false,
-  className = ''
+  className = '',
+  isEditing = false
 }: SupplierSelectorProps) => {
+  // En modification : on ne réaffiche la confirmation que si l'utilisateur agit sur le champ.
+  const [userReselected, setUserReselected] = useState(false);
   // Par défaut : "Nouveau fournisseur" à la création (aucun fournisseur pré-sélectionné),
   // "Sélectionner existant" en modification pour afficher le fournisseur déjà enregistré.
   const [mode, setMode] = useState<'select' | 'new'>(selectedSupplier ? 'select' : 'new');
@@ -75,6 +80,7 @@ const SupplierSelector = memo(({
     setShowDropdown(false);
     setMode('select');
     setNewSupplierName('');
+    setUserReselected(true);
   };
 
   const switchToSelectMode = () => {
@@ -83,6 +89,7 @@ const SupplierSelector = memo(({
     setNewSupplierName('');
     setFilteredSuppliers(existingSuppliers);
     setShowDropdown(existingSuppliers.length > 0);
+    setUserReselected(true);
     setTimeout(() => inputRef.current?.focus(), 0);
   };
 
@@ -111,7 +118,8 @@ const SupplierSelector = memo(({
     }
   };
 
-  const isSupplierSelected = selectedSupplier && mode === 'select';
+  // En modification, la confirmation "Fournisseur sélectionné" ne s'affiche que si l'utilisateur re-sélectionne.
+  const isSupplierSelected = selectedSupplier && mode === 'select' && (!isEditing || userReselected);
 
   return (
     <div className={`space-y-3 ${className}`}>
@@ -332,6 +340,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [missionFilter, setMissionFilter] = useState<'all' | 'mission' | 'non_mission'>('all');
   const [showOnlyToSign, setShowOnlyToSign] = useState(false);
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
@@ -365,7 +374,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
     quoteReference: '',
     invoiceNumber: '',
     date: new Date().toISOString().split('T')[0],
-    status: 'pending' as Engagement['status']
+    status: 'pending' as Engagement['status'],
+    isMission: false
   });
 
   const [availableAmount, setAvailableAmount] = useState<number>(0);
@@ -468,11 +478,16 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
   // 🎯 FONCTIONS POUR LA GESTION DES FOURNISSEURS
 
   const getExistingSuppliers = useCallback((): string[] => {
-    return [...new Set(
-      engagements
-        .filter(e => e.supplier && e.supplier.trim())
-        .map(e => e.supplier as string)
-    )].sort((a, b) => a.localeCompare(b));
+    // Dédoublonnage ROBUSTE : insensible à la casse ET aux espaces (internes, multiples,
+    // insécables) et aux caractères de compatibilité. "MTN", "mtn ", "M T N " => une entrée.
+    const map = new Map<string, string>();
+    engagements.forEach(e => {
+      const clean = (e.supplier || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
+      if (!clean) return;
+      const key = clean.toLowerCase();
+      if (!map.has(key)) map.set(key, clean); // on affiche le nom nettoyé
+    });
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b));
   }, [engagements]);
 
   // Callback pour la sélection d'un fournisseur (utilisé par SupplierSelector)
@@ -897,7 +912,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       quoteReference: '',
       invoiceNumber: '',
       date: new Date().toISOString().split('T')[0],
-      status: 'pending'
+      status: 'pending',
+      isMission: false
     });
     setApprovals({
       supervisor1: { name: '', signature: false, observation: '' },
@@ -1048,6 +1064,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
           invoiceNumber: formData.invoiceNumber.trim(),
           date: formData.date,
           status: statusToSave,
+          isMission: formData.isMission,
           approvals: approvalData
         });
         showSuccess('Engagement modifié', 'L\'engagement a été modifié avec succès');
@@ -1070,6 +1087,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
           invoiceNumber: formData.invoiceNumber.trim(),
           date: formData.date,
           status: formData.status,
+          isMission: formData.isMission,
           approvals: Object.keys(approvalData).length > 0 ? approvalData : undefined
         });
         showSuccess('Engagement créé', 'L\'engagement a été créé avec succès');
@@ -1103,7 +1121,8 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       quoteReference: engagement.quoteReference || '',
       invoiceNumber: engagement.invoiceNumber || '',
       date: engagement.date,
-      status: engagement.status
+      status: engagement.status,
+      isMission: engagement.isMission ?? false
     });
 
     if (engagement.approvals) {
@@ -1183,11 +1202,14 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       .reduce((sum, eng) => sum + eng.amount, 0);
   };
 
+  // Normalisation commune (casse + espaces internes/insécables) pour comparer des noms de fournisseurs
+  const normalizeSupplier = (s: string) => (s || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+
   const getSupplierHistory = (supplierName: string) => {
-    const normalizedName = supplierName.trim().toLowerCase();
+    const normalizedName = normalizeSupplier(supplierName);
     return engagements.filter(eng =>
       eng.supplier &&
-      eng.supplier.trim().toLowerCase() === normalizedName &&
+      normalizeSupplier(eng.supplier) === normalizedName &&
       eng.id !== editingEngagement?.id
     );
   };
@@ -1281,8 +1303,11 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
       const matchesSubBudgetLine = !subBudgetLineFilter ||
         engagement.subBudgetLineId === subBudgetLineFilter;
 
+      const matchesMission = missionFilter === 'all'
+        || (missionFilter === 'mission' ? !!engagement.isMission : !engagement.isMission);
+
       return matchesSearch && matchesStatus && matchesToSign && matchesDateRange &&
-        matchesSupplier && matchesBudgetLine && matchesSubBudgetLine;
+        matchesSupplier && matchesBudgetLine && matchesSubBudgetLine && matchesMission;
     });
   };
 
@@ -1633,6 +1658,101 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
  
 
   // 🎯 EXPORT EXCEL DE LA LISTE
+  // 🎯 EXPORT COMPTABLE — Excel groupé par RUBRIQUE (ligne budgétaire), sous-totaux + total général
+  const exportComptableByRubrique = async () => {
+    if (!canExport) {
+      showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
+      return;
+    }
+    setIsGeneratingExcel(true);
+    try {
+      const data = sortedEngagements;
+      if (data.length === 0) {
+        showWarning('Aucune donnée', 'Aucun engagement à exporter');
+        return;
+      }
+
+      const statusLabels: Record<string, string> = {
+        pending: 'En attente', approved: 'Approuvé', rejected: 'Rejeté', paid: 'Payé'
+      };
+      const currencySymbol = getCurrencySymbol(selectedGrant?.currency || 'EUR');
+      const fmt = (n: number) => `${n.toLocaleString('fr-FR')} ${currencySymbol}`;
+
+      const infoLines: string[] = [];
+      if (selectedGrant) {
+        infoLines.push(`Subvention : ${selectedGrant.name}`);
+        infoLines.push(`Référence : ${selectedGrant.reference}   •   Devise : ${selectedGrant.currency}`);
+      }
+      infoLines.push(`Généré le : ${new Date().toLocaleDateString('fr-FR')}`);
+
+      // Regroupement par rubrique = ligne budgétaire
+      const groups = new Map<string, { label: string; engagements: Engagement[] }>();
+      for (const e of data) {
+        const key = e.budgetLineId || '__none__';
+        if (!groups.has(key)) {
+          const bl = getBudgetLine(e.budgetLineId);
+          groups.set(key, { label: bl ? `${bl.code} - ${bl.name}` : 'Ligne inconnue', engagements: [] });
+        }
+        groups.get(key)!.engagements.push(e);
+      }
+
+      const rows: (string | number)[][] = [];
+      const rowKinds: Array<'group' | 'sub'> = [];
+      let grandTotal = 0;
+
+      for (const g of groups.values()) {
+        const subtotal = g.engagements.reduce((s, e) => s + e.amount, 0);
+        grandTotal += subtotal;
+        // Rangée RUBRIQUE (ligne budgétaire) avec son sous-total
+        rows.push([g.label, '', '', '', '', fmt(subtotal), '', '']);
+        rowKinds.push('group');
+        for (const e of g.engagements) {
+          const sub = getSubBudgetLine(e.subBudgetLineId);
+          rows.push([
+            e.engagementNumber,
+            new Date(e.date).toLocaleDateString('fr-FR'),
+            sub ? `${sub.code} - ${sub.name}` : 'N/A',
+            e.supplier || 'Non spécifié',
+            e.description || '',
+            fmt(e.amount),
+            e.invoiceNumber || '-',
+            statusLabels[e.status] || e.status,
+          ]);
+          rowKinds.push('sub');
+        }
+      }
+
+      const totalsRow = ['TOTAL GÉNÉRAL', '', '', '', '', fmt(grandTotal), '', ''];
+
+      exportStyledExcel({
+        fileName: `engagements-comptable-${selectedGrant?.reference || 'global'}-${new Date().toISOString().split('T')[0]}.xlsx`,
+        sheetName: 'Engagements par rubrique',
+        title: 'ENGAGEMENTS PAR RUBRIQUE (LIGNE BUDGÉTAIRE)',
+        infoLines,
+        columns: [
+          { header: 'N° Engagement / Rubrique', width: 28 },
+          { header: 'Date', width: 14, align: 'center' },
+          { header: 'Sous-ligne', width: 32 },
+          { header: 'Fournisseur', width: 24 },
+          { header: 'Description', width: 45 },
+          { header: 'Montant', width: 18, align: 'right' },
+          { header: 'N° Facture', width: 16 },
+          { header: 'Statut', width: 14, align: 'center' },
+        ],
+        rows,
+        rowKinds,
+        totalsRow,
+      });
+
+      showSuccess('Export réussi', 'Le fichier comptable (par rubrique) a été généré');
+    } catch (error) {
+      console.error('Erreur export comptable:', error);
+      showError('Erreur', 'Impossible de générer le fichier comptable');
+    } finally {
+      setIsGeneratingExcel(false);
+    }
+  };
+
   const exportToExcel = async (exportAllData: boolean = false) => {
     if (!canExport) {
       showError('Permission refusée', 'Vous n\'avez pas la permission d\'exporter des données');
@@ -2214,6 +2334,21 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
             </div>
         </div>
 
+        {/* Case Mission */}
+        <div className="mb-4">
+          <label className="inline-flex items-center gap-2 cursor-pointer select-none rounded-lg border border-gray-200 px-3 py-2 hover:bg-gray-50">
+            <input
+              type="checkbox"
+              checked={formData.isMission}
+              onChange={(e) => setFormData(prev => ({ ...prev, isMission: e.target.checked }))}
+              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            />
+            <span className="text-sm font-medium text-gray-700">
+              Cet engagement concerne une <span className="text-blue-700 font-semibold">mission</span>
+            </span>
+          </label>
+        </div>
+
         {formData.subBudgetLineId && subBudgetLine && (
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border border-blue-200 mb-4">
             <h4 className="font-medium text-gray-900 mb-3 flex items-center">
@@ -2274,7 +2409,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Fournisseur *
+              Fournisseur/Missionnaire *
             </label>
             <div className="flex items-center space-x-2">
               <div className="flex-1">
@@ -2283,6 +2418,7 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                   selectedSupplier={formData.supplier}
                   onSelectSupplier={handleSelectSupplier}
                   disabled={false}
+                  isEditing={!!editingEngagement}
                 />
               </div>
               {formData.supplier && (
@@ -2492,6 +2628,19 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
               <option value="pending">En attente</option>
               <option value="approved">Approuvé</option>
               <option value="rejected">Rejeté</option>
+            </select>
+          </div>
+
+          <div>
+            <select
+              value={missionFilter}
+              onChange={(e) => setMissionFilter(e.target.value as 'all' | 'mission' | 'non_mission')}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+              title="Filtrer les engagements de mission"
+            >
+              <option value="all">Missions et hors-mission</option>
+              <option value="mission">Missions uniquement</option>
+              <option value="non_mission">Hors-mission uniquement</option>
             </select>
           </div>
 
@@ -2715,6 +2864,15 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
           >
             <FileSpreadsheet className="w-4 h-4" />
             <span>Excel Complet</span>
+          </button>
+          <button
+            onClick={exportComptableByRubrique}
+            disabled={isGeneratingExcel}
+            className="bg-emerald-700 text-white px-3 py-2 rounded-lg text-sm font-medium hover:bg-emerald-800 flex items-center gap-1 disabled:opacity-50"
+            title="Export Excel groupé par rubrique (ligne budgétaire) avec sous-totaux"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Export comptable</span>
           </button>
         </div>
       )}
@@ -3206,6 +3364,11 @@ const EngagementManager: React.FC<EngagementManagerProps> = ({
                         </td>
                         <td className="px-4 py-4">
                           <div className="text-sm font-medium text-gray-900">{engagement.engagementNumber}</div>
+                          {engagement.isMission && (
+                            <span className="mt-1 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-100 text-blue-700">
+                              Mission
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-4">
                           <div className="text-sm text-gray-900 max-w-[150px]" title={budgetLine?.name}>

@@ -51,6 +51,9 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [searchTerm, setSearchTerm] = useState('');
+  // Tri périodique : filtre les MOUVEMENTS (engagé, décaissé, rejeté...) sur une plage de dates
+  const [periodFrom, setPeriodFrom] = useState('');
+  const [periodTo, setPeriodTo] = useState('');
   const [sortField, setSortField] = useState<SortField>('name');
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc');
   const [selectedBudgetLines, setSelectedBudgetLines] = useState<string[]>([]);
@@ -58,7 +61,18 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [expandedTexts, setExpandedTexts] = useState<{[key: string]: boolean}>({});
-  
+  // Lignes budgétaires dépliées dans le tableau hiérarchique
+  const [expandedTrackingLines, setExpandedTrackingLines] = useState<Set<string>>(new Set());
+
+  const toggleTrackingLine = (budgetLineId: string) => {
+    setExpandedTrackingLines(prev => {
+      const next = new Set(prev);
+      if (next.has(budgetLineId)) next.delete(budgetLineId);
+      else next.add(budgetLineId);
+      return next;
+    });
+  };
+
   const tableRef = useRef<HTMLTableElement>(null);
 
   // Permissions
@@ -86,6 +100,19 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   }, []);
 
   // ============================================
+  // TRI PÉRIODIQUE — filtre par plage de dates
+  // ============================================
+  const periodActive = !!(periodFrom || periodTo);
+  const inPeriod = (dateStr?: string): boolean => {
+    if (!periodActive) return true;
+    const s = (dateStr || '').slice(0, 10);
+    if (!s) return false;
+    if (periodFrom && s < periodFrom) return false;
+    if (periodTo && s > periodTo) return false;
+    return true;
+  };
+
+  // ============================================
   // FONCTIONS DE CALCUL AVEC PAIEMENTS ÉCHELONNÉS
   // ============================================
 
@@ -100,13 +127,15 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     );
     
     return linePayments.reduce((sum, payment) => {
-      // Si le paiement a des paiements partiels, sommer ceux-ci
+      // Si le paiement a des paiements partiels, sommer ceux dans la période
       if (payment.partialPayments && payment.partialPayments.length > 0) {
-        const totalPaid = payment.partialPayments.reduce((s, pp) => s + pp.amount, 0);
+        const totalPaid = payment.partialPayments
+          .filter(pp => inPeriod(pp.date))
+          .reduce((s, pp) => s + pp.amount, 0);
         return sum + totalPaid;
       }
-      // Sinon, prendre le montant total du paiement
-      return sum + payment.amount;
+      // Sinon, prendre le montant total du paiement si sa date est dans la période
+      return sum + (inPeriod(payment.date) ? payment.amount : 0);
     }, 0);
   };
 
@@ -205,13 +234,15 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       (p.status === 'paid' || p.status === 'in_progress')
     );
     return linePayments.reduce((sum, payment) => {
-      // Paiement échelonné : additionner ce qui a déjà été payé (partiels)
+      // Paiement échelonné : additionner les partiels dans la période
       if (payment.partialPayments && payment.partialPayments.length > 0) {
-        const totalPaid = payment.partialPayments.reduce((s, pp) => s + pp.amount, 0);
+        const totalPaid = payment.partialPayments
+          .filter(pp => inPeriod(pp.date))
+          .reduce((s, pp) => s + pp.amount, 0);
         return sum + totalPaid;
       }
-      // Paiement direct complet
-      if (payment.status === 'paid') {
+      // Paiement direct complet (si sa date est dans la période)
+      if (payment.status === 'paid' && inPeriod(payment.date)) {
         return sum + payment.amount;
       }
       return sum;
@@ -238,7 +269,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
    */
   const getPendingPaymentsForSubLine = (subBudgetLineId: string): number => {
     const approved = payments
-      .filter(p => p.subBudgetLineId === subBudgetLineId && p.status === 'approved')
+      .filter(p => p.subBudgetLineId === subBudgetLineId && p.status === 'approved' && inPeriod(p.date))
       .reduce((s, p) => s + p.amount, 0);
     return approved + getInProgressAmountForSubLine(subBudgetLineId);
   };
@@ -249,7 +280,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
    */
   const getRejectedPaymentsForSubLine = (subBudgetLineId: string): number => {
     return payments
-      .filter(p => p.subBudgetLineId === subBudgetLineId && p.status === 'rejected')
+      .filter(p => p.subBudgetLineId === subBudgetLineId && p.status === 'rejected' && inPeriod(p.date))
       .reduce((s, p) => s + p.amount, 0);
   };
 
@@ -262,6 +293,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       .filter(e =>
         e.subBudgetLineId === subBudgetLineId &&
         e.status === 'approved' &&
+        inPeriod(e.date) &&
         !payments.some(p => p.engagementId === e.id)
       )
       .reduce((s, e) => s + e.amount, 0);
@@ -422,8 +454,21 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   // CALCULS PRINCIPAUX
   // ============================================
 
+  /**
+   * Montant engagé pour une sous-ligne.
+   * - Hors période : montant engagé stocké (engagements approuvés cumulés).
+   * - En période : somme des engagements approuvés/payés dont la date est dans la plage.
+   */
+  const getEngagedForSubLine = (line: SubBudgetLine): number => {
+    if (!periodActive) return line.engagedAmount;
+    return engagements
+      .filter(e => e.subBudgetLineId === line.id && (e.status === 'approved' || e.status === 'paid') && inPeriod(e.date))
+      .reduce((s, e) => s + e.amount, 0);
+  };
+
   const getEngagementRate = (line: SubBudgetLine) => {
-    return line.notifiedAmount > 0 ? (line.engagedAmount / line.notifiedAmount) * 100 : 0;
+    const engaged = getEngagedForSubLine(line);
+    return line.notifiedAmount > 0 ? (engaged / line.notifiedAmount) * 100 : 0;
   };
 
   const getSpentRate = (line: SubBudgetLine) => {
@@ -449,10 +494,10 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     return 'bg-gray-400';
   };
 
-  // Totaux
+  // Totaux (period-aware : engagé/disponible suivent la plage de dates si active)
   const totalNotified = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.notifiedAmount, 0);
-  const totalEngaged = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.engagedAmount, 0);
-  const totalAvailable = filteredSubBudgetLinesData.reduce((sum, line) => sum + line.availableAmount, 0);
+  const totalEngaged = filteredSubBudgetLinesData.reduce((sum, line) => sum + getEngagedForSubLine(line), 0);
+  const totalAvailable = filteredSubBudgetLinesData.reduce((sum, line) => sum + (periodActive ? (line.notifiedAmount - getEngagedForSubLine(line)) : line.availableAmount), 0);
   const totalSpent = getTotalDisbursedForAllSubBudgetLines();
   const totalInProgress = getTotalInProgressForAllSubBudgetLines();
   const totalRemainingToPay = getTotalRemainingToPayForAllSubBudgetLines();
@@ -465,25 +510,26 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
   const filteredLineIds = new Set(filteredSubBudgetLinesData.map(l => l.id));
   // Montant non engagé = budget notifié encore disponible à engager
   const totalNonEngaged = Math.max(0, totalNotified - totalEngaged);
-  // Engagements rejetés (montant) — retournent au disponible
+  // Engagements rejetés (montant) — retournent au disponible (period-aware)
   const rejectedEngagementsAmount = engagements
-    .filter(e => e.status === 'rejected' && filteredLineIds.has(e.subBudgetLineId))
+    .filter(e => e.status === 'rejected' && filteredLineIds.has(e.subBudgetLineId) && inPeriod(e.date))
     .reduce((s, e) => s + e.amount, 0);
-  // Paiements approuvés (non encore décaissés) — montant total
+  // Paiements approuvés (non encore décaissés) — montant total (period-aware)
   const approvedPaymentsAmount = payments
-    .filter(p => p.status === 'approved' && filteredLineIds.has(p.subBudgetLineId))
+    .filter(p => p.status === 'approved' && filteredLineIds.has(p.subBudgetLineId) && inPeriod(p.date))
     .reduce((s, p) => s + p.amount, 0);
   // Paiements en attente = paiements approuvés + reste à payer des paiements échelonnés en cours
   const pendingPaymentsAmount = approvedPaymentsAmount + totalInProgress;
-  // Paiements à créer = engagements approuvés dont la fiche de paiement n'existe pas encore
+  // Paiements à créer = engagements approuvés dont la fiche de paiement n'existe pas encore (period-aware)
   const paymentsToCreateAmount = engagements
     .filter(e => e.status === 'approved'
       && filteredLineIds.has(e.subBudgetLineId)
+      && inPeriod(e.date)
       && !payments.some(p => p.engagementId === e.id))
     .reduce((s, e) => s + e.amount, 0);
-  // Paiements rejetés (montant)
+  // Paiements rejetés (montant) — period-aware
   const rejectedPaymentsAmount = payments
-    .filter(p => p.status === 'rejected' && filteredLineIds.has(p.subBudgetLineId))
+    .filter(p => p.status === 'rejected' && filteredLineIds.has(p.subBudgetLineId) && inPeriod(p.date))
     .reduce((s, p) => s + p.amount, 0);
   const go = (tab: string) => onNavigate && onNavigate(tab);
 
@@ -535,12 +581,16 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     const engagementRate = getEngagementRate(line);
     const spentRate = getSpentRate(line);
     const progressRate = paymentStats.progressRate;
+    const engagedAmount = getEngagedForSubLine(line);
     const budgetLine = budgetLines.find(bl => bl.id === line.budgetLineId);
     const lineGrant = grants.find(g => g.id === line.grantId);
     const lineEngagements = engagements.filter(eng => eng.subBudgetLineId === line.id);
 
     return {
       ...line,
+      // En période : montant engagé et disponible recalculés sur la plage de dates
+      engagedAmount,
+      availableAmount: periodActive ? (line.notifiedAmount - engagedAmount) : line.availableAmount,
       spentAmount,
       inProgressAmount,
       pendingPayments: getPendingPaymentsForSubLine(line.id),
@@ -556,6 +606,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       grantCurrency: lineGrant?.currency || 'EUR',
       engagementsCount: lineEngagements.length,
       hasPartialPayments: paymentStats.partialPaymentsCount > 0
+        || payments.some(p => p.subBudgetLineId === line.id && p.isScheduled)
     };
   });
 
@@ -583,9 +634,48 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       return 0;
     });
 
-  const totalPages = Math.ceil(filteredAndSortedData.length / itemsPerPage);
+  // 🌳 Regroupement hiérarchique : chaque ligne budgétaire cumule ses sous-lignes
+  const groupedLines = (() => {
+    const map = new Map<string, any>();
+    for (const sub of filteredAndSortedData) {
+      let g = map.get(sub.budgetLineId);
+      if (!g) {
+        g = {
+          budgetLineId: sub.budgetLineId,
+          code: sub.budgetLineCode,
+          name: sub.budgetLineName,
+          grantCurrency: sub.grantCurrency,
+          subs: [] as any[],
+          notifiedAmount: 0, engagedAmount: 0, spentAmount: 0,
+          pendingPayments: 0, paymentsToCreate: 0, rejectedPayments: 0,
+          availableAmount: 0, hasPartialPayments: false,
+        };
+        map.set(sub.budgetLineId, g);
+      }
+      g.subs.push(sub);
+      g.notifiedAmount += sub.notifiedAmount;
+      g.engagedAmount += sub.engagedAmount;
+      g.spentAmount += sub.spentAmount;
+      g.pendingPayments += sub.pendingPayments;
+      g.paymentsToCreate += sub.paymentsToCreate;
+      g.rejectedPayments += sub.rejectedPayments;
+      g.availableAmount += sub.availableAmount;
+      if (sub.hasPartialPayments) g.hasPartialPayments = true;
+    }
+    const arr = Array.from(map.values());
+    for (const g of arr) {
+      g.engagementRate = g.notifiedAmount > 0 ? (g.engagedAmount / g.notifiedAmount) * 100 : 0;
+      g.spentRate = g.notifiedAmount > 0 ? (g.spentAmount / g.notifiedAmount) * 100 : 0;
+    }
+    return arr;
+  })();
+
+  // Pagination par LIGNE budgétaire (et non plus par sous-ligne)
+  const totalPages = Math.ceil(groupedLines.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
-  const paginatedData = filteredAndSortedData.slice(startIndex, startIndex + itemsPerPage);
+  const paginatedGroups = groupedLines.slice(startIndex, startIndex + itemsPerPage);
+  // Sous-lignes des lignes affichées sur la page courante (utilisé par les exports "page")
+  const paginatedData = paginatedGroups.flatMap(g => g.subs);
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -643,9 +733,9 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
     setIsGeneratingExcel(true);
     
     try {
-      const dataToExport = exportAllData ? filteredAndSortedData : paginatedData;
-      
-      if (dataToExport.length === 0) {
+      const groupsToExport = exportAllData ? groupedLines : paginatedGroups;
+
+      if (groupsToExport.length === 0) {
         showWarning('Aucune donnée', 'Aucune donnée à exporter');
         return;
       }
@@ -656,41 +746,64 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         infoLines.push(`Référence : ${selectedGrant.reference}   •   Devise : ${selectedGrant.currency}`);
         infoLines.push(`Paiements échelonnés actifs : ${activePartialPayments}`);
       }
+      if (periodActive) {
+        const f = periodFrom ? new Date(periodFrom).toLocaleDateString('fr-FR') : '…';
+        const t = periodTo ? new Date(periodTo).toLocaleDateString('fr-FR') : '…';
+        infoLines.push(`Période (mouvements) : du ${f} au ${t}`);
+      }
       infoLines.push(`Généré le : ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}`);
 
-      const totalsCurrency = selectedGrant?.currency || dataToExport[0]?.grantCurrency || 'EUR';
-
-      const dataRows = dataToExport.map((line) => {
-        const cur = line.grantCurrency;
+      // Lignes hiérarchiques : chaque ligne budgétaire (cumul) suivie de ses sous-lignes
+      const dataRows: (string | number)[][] = [];
+      const rowKinds: Array<'group' | 'sub'> = [];
+      const buildRow = (item: any) => {
+        const cur = item.grantCurrency;
         return [
-          line.name,
-          line.code,
-          line.budgetLineName,
-          formatCurrency(line.notifiedAmount, cur),
-          formatCurrency(line.engagedAmount, cur),
-          formatCurrency(line.spentAmount, cur),
-          line.pendingPayments > 0 ? formatCurrency(line.pendingPayments, cur) : '-',
-          line.paymentsToCreate > 0 ? formatCurrency(line.paymentsToCreate, cur) : '-',
-          line.rejectedPayments > 0 ? formatCurrency(line.rejectedPayments, cur) : '-',
-          formatCurrency(line.availableAmount, cur),
-          `${line.engagementRate.toFixed(2)}%`,
-          `${line.spentRate.toFixed(2)}%`,
+          item.name,
+          item.code,
+          formatCurrency(item.notifiedAmount, cur),
+          formatCurrency(item.engagedAmount, cur),
+          formatCurrency(item.spentAmount, cur),
+          item.pendingPayments > 0 ? formatCurrency(item.pendingPayments, cur) : '-',
+          item.paymentsToCreate > 0 ? formatCurrency(item.paymentsToCreate, cur) : '-',
+          item.rejectedPayments > 0 ? formatCurrency(item.rejectedPayments, cur) : '-',
+          formatCurrency(item.availableAmount, cur),
+          `${item.engagementRate.toFixed(2)}%`,
+          `${item.spentRate.toFixed(2)}%`,
         ];
-      });
+      };
+      for (const g of groupsToExport) {
+        dataRows.push(buildRow(g));
+        rowKinds.push('group');
+        for (const sub of g.subs) {
+          dataRows.push(buildRow(sub));
+          rowKinds.push('sub');
+        }
+      }
+
+      // Totaux (cumul des lignes exportées)
+      const sumBy = (f: (g: any) => number) => groupsToExport.reduce((s, g) => s + f(g), 0);
+      const tNotified = sumBy(g => g.notifiedAmount);
+      const tEngaged = sumBy(g => g.engagedAmount);
+      const tSpent = sumBy(g => g.spentAmount);
+      const tPending = sumBy(g => g.pendingPayments);
+      const tToCreate = sumBy(g => g.paymentsToCreate);
+      const tRejected = sumBy(g => g.rejectedPayments);
+      const tAvailable = sumBy(g => g.availableAmount);
+      const totalsCurrency = selectedGrant?.currency || groupsToExport[0]?.grantCurrency || 'EUR';
 
       const totalsRow = [
         'TOTAUX',
         '',
-        '',
-        formatCurrency(totalNotified, totalsCurrency),
-        formatCurrency(totalEngaged, totalsCurrency),
-        formatCurrency(totalSpent, totalsCurrency),
-        formatCurrency(totalPendingPayments, totalsCurrency),
-        formatCurrency(paymentsToCreateAmount, totalsCurrency),
-        formatCurrency(rejectedPaymentsAmount, totalsCurrency),
-        formatCurrency(totalAvailable, totalsCurrency),
-        `${overallEngagementRate.toFixed(2)}%`,
-        `${overallSpentRate.toFixed(2)}%`,
+        formatCurrency(tNotified, totalsCurrency),
+        formatCurrency(tEngaged, totalsCurrency),
+        formatCurrency(tSpent, totalsCurrency),
+        formatCurrency(tPending, totalsCurrency),
+        formatCurrency(tToCreate, totalsCurrency),
+        formatCurrency(tRejected, totalsCurrency),
+        formatCurrency(tAvailable, totalsCurrency),
+        `${tNotified > 0 ? ((tEngaged / tNotified) * 100).toFixed(2) : '0.00'}%`,
+        `${tNotified > 0 ? ((tSpent / tNotified) * 100).toFixed(2) : '0.00'}%`,
       ];
 
       const suffix = exportAllData ? 'complet' : 'page';
@@ -699,12 +812,11 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       exportStyledExcel({
         fileName,
         sheetName: exportAllData ? 'Suivi Budgétaire Complet' : 'Suivi Budgétaire Page',
-        title: 'SUIVI BUDGÉTAIRE DÉTAILLÉ AVEC PAIEMENTS ÉCHELONNÉS',
+        title: 'SUIVI BUDGÉTAIRE PAR LIGNE ET SOUS-LIGNE',
         infoLines,
         columns: [
-          { header: 'Sous-ligne', width: 35 },
+          { header: 'Ligne / Sous-ligne', width: 38 },
           { header: 'Code', width: 15 },
-          { header: 'Ligne budgétaire', width: 30 },
           { header: 'Notifié', width: 18, align: 'right' },
           { header: 'Engagé', width: 18, align: 'right' },
           { header: 'Décaissé', width: 18, align: 'right' },
@@ -716,6 +828,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           { header: 'Taux Déc.', width: 12, align: 'center' },
         ],
         rows: dataRows,
+        rowKinds,
         totalsRow,
       });
 
@@ -750,18 +863,24 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
         console.warn('Logo non chargé, continuation sans logo');
       }
 
-      const dataToExport = exportAllData ? filteredAndSortedData : paginatedData;
-      
-      if (dataToExport.length === 0) {
+      const groupsToExport = exportAllData ? groupedLines : paginatedGroups;
+
+      if (groupsToExport.length === 0) {
         showWarning('Aucune donnée', 'Aucune donnée à exporter');
         return;
       }
 
-      // Configuration des colonnes — identique au tableau "Détail par Sous-ligne"
+      // Liste à plat : chaque ligne budgétaire (cumul) suivie de ses sous-lignes
+      const dataToExport: any[] = [];
+      for (const g of groupsToExport) {
+        dataToExport.push({ ...g, __kind: 'group' });
+        for (const sub of g.subs) dataToExport.push({ ...sub, __kind: 'sub' });
+      }
+
+      // Configuration des colonnes — identique au tableau "Exécution budgétaire par ligne"
       const columnConfig = [
-        { key: 'name', label: 'Sous-ligne', width: 42, align: 'left' },
+        { key: 'name', label: 'Ligne / Sous-ligne', width: 62, align: 'left' },
         { key: 'code', label: 'Code', width: 18, align: 'left' },
-        { key: 'budgetLineName', label: 'Ligne budgétaire', width: 38, align: 'left' },
         { key: 'notifiedAmount', label: 'Notifié', width: 22, align: 'right' },
         { key: 'engagedAmount', label: 'Engagé', width: 22, align: 'right' },
         { key: 'spentAmount', label: 'Décaissé', width: 22, align: 'right' },
@@ -860,6 +979,12 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           pdf.text(`Paiements échelonnés actifs: ${activePartialPayments}`, margin, y); y += 5;
         }
 
+        if (periodActive) {
+          const f = periodFrom ? new Date(periodFrom).toLocaleDateString('fr-FR') : '…';
+          const t = periodTo ? new Date(periodTo).toLocaleDateString('fr-FR') : '…';
+          pdf.text(`Période (mouvements): du ${f} au ${t}`, margin, y); y += 5;
+        }
+
         pdf.setFontSize(9);
         pdf.text(`Généré le ${new Date().toLocaleDateString('fr-FR')} à ${new Date().toLocaleTimeString('fr-FR')}`, margin, y);
         y += 6;
@@ -889,9 +1014,18 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
           currentY = drawColumnHeader(margin);
         }
 
-        if (rowIndex % 2 === 0) {
-          pdf.setFillColor(249, 250, 251);
+        const isGroup = line.__kind === 'group';
+        if (isGroup) {
+          // Ligne budgétaire (cumul) : fond bleu clair + gras
+          pdf.setFillColor(219, 234, 254);
           pdf.rect(margin, currentY - 4, pageWidth - (margin * 2), 12, 'F');
+          pdf.setFont('helvetica', 'bold');
+        } else {
+          pdf.setFont('helvetica', 'normal');
+          if (rowIndex % 2 === 0) {
+            pdf.setFillColor(249, 250, 251);
+            pdf.rect(margin, currentY - 4, pageWidth - (margin * 2), 12, 'F');
+          }
         }
 
         pdf.setFontSize(7);
@@ -911,13 +1045,15 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
             displayValue = value?.toString() || '';
           }
 
-          if (col.key === 'name' || col.key === 'budgetLineName') {
-            const lines = splitText(displayValue, col.width - 4);
-            
+          if (col.key === 'name') {
+            const indent = isGroup ? 0 : 5;
+            const prefix = isGroup ? '' : '• ';
+            const lines = splitText(displayValue, col.width - 4 - indent);
+
             lines.forEach((lineText, lineIndex) => {
-              pdf.text(lineText, xPosition + 2, currentY + 2 + (lineIndex * 3.5));
+              pdf.text((lineIndex === 0 ? prefix : '') + lineText, xPosition + 2 + indent, currentY + 2 + (lineIndex * 3.5));
             });
-            
+
             maxLinesInRow = Math.max(maxLinesInRow, lines.length);
           } else {
             let x = xPosition;
@@ -969,17 +1105,21 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       pdf.setFont('helvetica', 'bold');
       pdf.setTextColor(0, 0, 0);
 
+      const pdfSum = (f: (g: any) => number) => groupsToExport.reduce((s, g) => s + f(g), 0);
+      const gNotified = pdfSum(g => g.notifiedAmount);
+      const gEngaged = pdfSum(g => g.engagedAmount);
+      const gSpent = pdfSum(g => g.spentAmount);
       const totalsByKey: Record<string, string> = {
         name: 'TOTAUX',
-        notifiedAmount: formatNumberWithSpaces(totalNotified),
-        engagedAmount: formatNumberWithSpaces(totalEngaged),
-        spentAmount: formatNumberWithSpaces(totalSpent),
-        pendingPayments: formatNumberWithSpaces(totalPendingPayments),
-        paymentsToCreate: formatNumberWithSpaces(paymentsToCreateAmount),
-        rejectedPayments: formatNumberWithSpaces(rejectedPaymentsAmount),
-        availableAmount: formatNumberWithSpaces(totalAvailable),
-        engagementRate: `${overallEngagementRate.toFixed(1)}%`,
-        spentRate: `${overallSpentRate.toFixed(1)}%`,
+        notifiedAmount: formatNumberWithSpaces(gNotified),
+        engagedAmount: formatNumberWithSpaces(gEngaged),
+        spentAmount: formatNumberWithSpaces(gSpent),
+        pendingPayments: formatNumberWithSpaces(pdfSum(g => g.pendingPayments)),
+        paymentsToCreate: formatNumberWithSpaces(pdfSum(g => g.paymentsToCreate)),
+        rejectedPayments: formatNumberWithSpaces(pdfSum(g => g.rejectedPayments)),
+        availableAmount: formatNumberWithSpaces(pdfSum(g => g.availableAmount)),
+        engagementRate: `${gNotified > 0 ? ((gEngaged / gNotified) * 100).toFixed(1) : '0.0'}%`,
+        spentRate: `${gNotified > 0 ? ((gSpent / gNotified) * 100).toFixed(1) : '0.0'}%`,
       };
 
       xPosition = margin;
@@ -1397,40 +1537,99 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
       {/* Tableau — placé en bas (après Suivi par ligne et Alertes) via order-last */}
       <div className="order-last bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-3 sm:p-4 border-b border-gray-200">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-            <h3 className="text-base sm:text-lg font-semibold text-gray-900">
-              Détail par Sous-ligne
-              <span className="text-sm font-normal text-gray-600 ml-2">
-                ({filteredAndSortedData.length})
-              </span>
-            </h3>
-            
-            <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-              <div className="relative">
-                <Search className="w-3 h-3 sm:w-4 sm:h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Rechercher..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full text-sm"
-                />
-              </div>
+          {/* Titre — sur sa propre ligne, au-dessus de tous les filtres */}
+          <h3 className="text-base sm:text-lg font-semibold text-gray-900">
+            Exécution budgétaire par ligne
+            <span className="text-sm font-normal text-gray-600 ml-2">
+              ({groupedLines.length} ligne{groupedLines.length > 1 ? 's' : ''} · {filteredAndSortedData.length} sous-ligne{filteredAndSortedData.length > 1 ? 's' : ''})
+            </span>
+          </h3>
 
-              <select
-                value={itemsPerPage}
-                onChange={(e) => setItemsPerPage(Number(e.target.value))}
-                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-              >
-                <option value="5">5 lignes</option>
-                <option value="10">10 lignes</option>
-                <option value="20">20 lignes</option>
-                <option value="50">50 lignes</option>
-              </select>
+          {/* Filtres : recherche, développer/réduire, pagination */}
+          <div className="mt-3 flex flex-col sm:flex-row flex-wrap gap-2">
+            <div className="relative">
+              <Search className="w-3 h-3 sm:w-4 sm:h-4 absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Rechercher..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-8 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-full text-sm"
+              />
             </div>
+
+            {/* Tout développer / Tout réduire */}
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setExpandedTrackingLines(new Set(groupedLines.map(g => g.budgetLineId)))}
+                className="flex items-center gap-1 px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                title="Déplier toutes les lignes"
+              >
+                <ChevronDown className="w-4 h-4" />
+                <span className="whitespace-nowrap">Tout développer</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpandedTrackingLines(new Set())}
+                className="flex items-center gap-1 px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-slate-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                title="Replier toutes les lignes"
+              >
+                <ChevronRight className="w-4 h-4" />
+                <span className="whitespace-nowrap">Tout réduire</span>
+              </button>
+            </div>
+
+            <select
+              value={itemsPerPage}
+              onChange={(e) => setItemsPerPage(Number(e.target.value))}
+              className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+            >
+              <option value="5">5 lignes</option>
+              <option value="10">10 lignes</option>
+              <option value="20">20 lignes</option>
+              <option value="50">50 lignes</option>
+            </select>
+          </div>
+
+          {/* Tri périodique : filtre les mouvements (engagé, décaissé, rejeté...) sur une plage de dates */}
+          <div className="mt-3 flex flex-col sm:flex-row sm:items-center gap-2 text-sm">
+            <span className="flex items-center gap-1 text-gray-600 dark:text-gray-300 font-medium">
+              <Clock className="w-4 h-4" /> Période :
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-gray-500 dark:text-gray-400 text-xs">Du</label>
+              <input
+                type="date"
+                value={periodFrom}
+                onChange={(e) => { setPeriodFrom(e.target.value); setCurrentPage(1); }}
+                className="px-2 py-1.5 border border-gray-300 rounded-lg text-sm"
+              />
+              <label className="text-gray-500 dark:text-gray-400 text-xs">Au</label>
+              <input
+                type="date"
+                value={periodTo}
+                onChange={(e) => { setPeriodTo(e.target.value); setCurrentPage(1); }}
+                className="px-2 py-1.5 border border-gray-300 rounded-lg text-sm"
+              />
+              {periodActive && (
+                <button
+                  type="button"
+                  onClick={() => { setPeriodFrom(''); setPeriodTo(''); setCurrentPage(1); }}
+                  className="px-2.5 py-1.5 text-xs rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-slate-700 dark:text-gray-200 dark:hover:bg-slate-600"
+                >
+                  Effacer
+                </button>
+              )}
+            </div>
+            {periodActive && (
+              <span className="text-xs text-blue-600 dark:text-blue-300">
+                Mouvements filtrés sur la période — le budget notifié reste global.
+              </span>
+            )}
           </div>
         </div>
-        
+
         {filteredSubBudgetLines.length === 0 ? (
           <div className="text-center py-8">
             <div className="w-12 h-12 mx-auto mb-3 bg-gray-100 rounded-full flex items-center justify-center">
@@ -1535,22 +1734,22 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
               /* Version desktop avec colonnes élargies */
               <div className="overflow-x-auto">
                 <table ref={tableRef} className="w-full min-w-[1400px]">
-                  <thead className="bg-gray-50">
+                  <thead className="bg-gray-50 dark:bg-slate-800">
                     <tr>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('name')}>
+                      <th className="px-2 py-2 w-8"></th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-700 whitespace-nowrap" onClick={() => handleSort('name')}>
                         <div className="flex items-center space-x-1">
-                          <span>Sous-ligne</span>
+                          <span>Ligne / Sous-ligne</span>
                           <SortIcon field="name" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('code')}>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-700 whitespace-nowrap" onClick={() => handleSort('code')}>
                         <div className="flex items-center space-x-1">
                           <span>Code</span>
                           <SortIcon field="code" />
                         </div>
                       </th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider whitespace-nowrap">Ligne budgétaire</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 whitespace-nowrap" onClick={() => handleSort('notifiedAmount')}>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-700 whitespace-nowrap" onClick={() => handleSort('notifiedAmount')}>
                         <div className="flex items-center justify-end space-x-1">
                           <span>Notifié</span>
                           <SortIcon field="notifiedAmount" />
@@ -1606,84 +1805,82 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
                       )}
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {paginatedData.map(line => (
-                      <tr key={line.id} className={`hover:bg-gray-50 ${line.hasPartialPayments ? 'bg-purple-50/30' : ''}`}>
-                        <td className="px-3 py-2 max-w-[120px]">
-                          <div className="text-sm font-medium text-gray-900">
-                            <ExpandableText 
-                              text={line.name} 
-                              lineId={line.id} 
-                              field="name"
-                              maxLength={30}
-                              textClassName="font-medium text-gray-900"
-                            />
-                            {line.hasPartialPayments && (
-                              <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                                <DollarSign className="w-2.5 h-2.5 mr-0.5" />
-                                Échelonné
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2">
-                          <div className="text-xs text-gray-500">{line.code}</div>
-                        </td>
-                        <td className="px-3 py-2 max-w-[100px]">
-                          <div className="text-sm text-gray-900">
-                            <ExpandableText 
-                              text={line.budgetLineName} 
-                              lineId={line.id} 
-                              field="budgetLineName"
-                              maxLength={25}
-                              textClassName="text-gray-900"
-                            />
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm font-medium text-gray-900 whitespace-nowrap">
-                          {formatCurrency(line.notifiedAmount, line.grantCurrency)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm text-gray-900 whitespace-nowrap">
-                          {formatCurrency(line.engagedAmount, line.grantCurrency)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm text-indigo-600 font-medium whitespace-nowrap">
-                          {formatCurrency(line.spentAmount, line.grantCurrency)}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm text-orange-600 font-medium whitespace-nowrap">
-                          {line.pendingPayments > 0 ? formatCurrency(line.pendingPayments, line.grantCurrency) : '-'}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm text-orange-600 font-medium whitespace-nowrap">
-                          {line.paymentsToCreate > 0 ? formatCurrency(line.paymentsToCreate, line.grantCurrency) : '-'}
-                        </td>
-                        <td className="px-3 py-2 text-right text-sm text-red-600 font-medium whitespace-nowrap">
-                          {line.rejectedPayments > 0 ? formatCurrency(line.rejectedPayments, line.grantCurrency) : '-'}
-                        </td>
-                        <td className={`px-3 py-2 text-right text-sm font-medium whitespace-nowrap ${line.availableAmount < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          {formatCurrency(line.availableAmount, line.grantCurrency)}
-                        </td>
-                        <td className="px-3 py-2 text-center whitespace-nowrap">
-                          <span className={`text-xs font-medium ${getEngagementColor(line.engagementRate)}`}>
-                            {line.engagementRate.toFixed(2)}%
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-center whitespace-nowrap">
-                          <span className={`text-xs font-medium ${getEngagementColor(line.spentRate)}`}>
-                            {line.spentRate.toFixed(2)}%
-                          </span>
-                        </td>
-                        {canViewDetails && (
-                          <td className="px-3 py-2 text-center whitespace-nowrap">
-                            <button
-                              onClick={() => onViewEngagements(line.id)}
-                              className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded-full hover:bg-blue-200 transition-colors"
-                            >
-                              <Eye className="w-3 h-3 mr-1" />
-                              Détails
-                            </button>
+                  <tbody className="divide-y divide-gray-200 dark:divide-slate-700">
+                    {paginatedGroups.map((group: any) => {
+                      const isOpen = expandedTrackingLines.has(group.budgetLineId);
+                      return (
+                      <React.Fragment key={group.budgetLineId}>
+                        {/* Ligne budgétaire — cumul de ses sous-lignes */}
+                        <tr
+                          className="bg-indigo-100/80 dark:bg-indigo-900/40 hover:bg-indigo-200/70 dark:hover:bg-indigo-900/60 font-semibold border-l-4 border-l-indigo-500 cursor-pointer"
+                          onClick={() => toggleTrackingLine(group.budgetLineId)}
+                        >
+                          <td className="px-2 py-2 text-center">
+                            {isOpen ? <ChevronDown className="w-4 h-4 text-gray-500 inline" /> : <ChevronRight className="w-4 h-4 text-gray-500 inline" />}
                           </td>
-                        )}
-                      </tr>
-                    ))}
+                          <td className="px-3 py-2 max-w-[240px]">
+                            <div className="text-sm font-semibold text-gray-900 dark:text-gray-100 flex items-center">
+                              <span className="truncate">{group.name}</span>
+                              <span className="ml-2 text-[10px] font-normal text-gray-500 dark:text-gray-400 whitespace-nowrap">({group.subs.length} sous-ligne{group.subs.length > 1 ? 's' : ''})</span>
+                              {group.hasPartialPayments && (
+                                <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                                  <DollarSign className="w-2.5 h-2.5 mr-0.5" />Échelonné
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2"><div className="text-xs font-semibold text-gray-600 dark:text-gray-300">{group.code}</div></td>
+                          <td className="px-3 py-2 text-right text-sm font-semibold text-gray-900 dark:text-gray-100 whitespace-nowrap">{formatCurrency(group.notifiedAmount, group.grantCurrency)}</td>
+                          <td className="px-3 py-2 text-right text-sm font-semibold text-gray-900 dark:text-gray-100 whitespace-nowrap">{formatCurrency(group.engagedAmount, group.grantCurrency)}</td>
+                          <td className="px-3 py-2 text-right text-sm font-semibold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">{formatCurrency(group.spentAmount, group.grantCurrency)}</td>
+                          <td className="px-3 py-2 text-right text-sm font-semibold text-orange-600 dark:text-orange-400 whitespace-nowrap">{group.pendingPayments > 0 ? formatCurrency(group.pendingPayments, group.grantCurrency) : '-'}</td>
+                          <td className="px-3 py-2 text-right text-sm font-semibold text-orange-600 dark:text-orange-400 whitespace-nowrap">{group.paymentsToCreate > 0 ? formatCurrency(group.paymentsToCreate, group.grantCurrency) : '-'}</td>
+                          <td className="px-3 py-2 text-right text-sm font-semibold text-red-600 dark:text-red-400 whitespace-nowrap">{group.rejectedPayments > 0 ? formatCurrency(group.rejectedPayments, group.grantCurrency) : '-'}</td>
+                          <td className={`px-3 py-2 text-right text-sm font-semibold whitespace-nowrap ${group.availableAmount < 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>{formatCurrency(group.availableAmount, group.grantCurrency)}</td>
+                          <td className="px-3 py-2 text-center whitespace-nowrap"><span className={`text-xs font-semibold ${getEngagementColor(group.engagementRate)}`}>{group.engagementRate.toFixed(2)}%</span></td>
+                          <td className="px-3 py-2 text-center whitespace-nowrap"><span className={`text-xs font-semibold ${getEngagementColor(group.spentRate)}`}>{group.spentRate.toFixed(2)}%</span></td>
+                          {canViewDetails && <td className="px-3 py-2"></td>}
+                        </tr>
+
+                        {/* Sous-lignes (dépliées) */}
+                        {isOpen && group.subs.map((line: any) => (
+                          <tr key={line.id} className="bg-white dark:bg-slate-900 hover:bg-gray-50 dark:hover:bg-slate-800/60">
+                            <td className="px-2 py-2"></td>
+                            <td className="px-3 py-2 max-w-[240px]">
+                              <div className="text-sm text-gray-800 dark:text-gray-200 flex items-center pl-4 border-l-2 border-slate-200 dark:border-slate-600">
+                                <span className="truncate">{line.name}</span>
+                                {line.hasPartialPayments && (
+                                  <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                                    <DollarSign className="w-2.5 h-2.5 mr-0.5" />Éch.
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2"><div className="text-xs text-gray-500 dark:text-gray-400">{line.code}</div></td>
+                            <td className="px-3 py-2 text-right text-sm text-gray-800 dark:text-gray-200 whitespace-nowrap">{formatCurrency(line.notifiedAmount, line.grantCurrency)}</td>
+                            <td className="px-3 py-2 text-right text-sm text-gray-800 dark:text-gray-200 whitespace-nowrap">{formatCurrency(line.engagedAmount, line.grantCurrency)}</td>
+                            <td className="px-3 py-2 text-right text-sm text-indigo-600 dark:text-indigo-400 whitespace-nowrap">{formatCurrency(line.spentAmount, line.grantCurrency)}</td>
+                            <td className="px-3 py-2 text-right text-sm text-orange-600 dark:text-orange-400 whitespace-nowrap">{line.pendingPayments > 0 ? formatCurrency(line.pendingPayments, line.grantCurrency) : '-'}</td>
+                            <td className="px-3 py-2 text-right text-sm text-orange-600 dark:text-orange-400 whitespace-nowrap">{line.paymentsToCreate > 0 ? formatCurrency(line.paymentsToCreate, line.grantCurrency) : '-'}</td>
+                            <td className="px-3 py-2 text-right text-sm text-red-600 dark:text-red-400 whitespace-nowrap">{line.rejectedPayments > 0 ? formatCurrency(line.rejectedPayments, line.grantCurrency) : '-'}</td>
+                            <td className={`px-3 py-2 text-right text-sm whitespace-nowrap ${line.availableAmount < 0 ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>{formatCurrency(line.availableAmount, line.grantCurrency)}</td>
+                            <td className="px-3 py-2 text-center whitespace-nowrap"><span className={`text-xs font-medium ${getEngagementColor(line.engagementRate)}`}>{line.engagementRate.toFixed(2)}%</span></td>
+                            <td className="px-3 py-2 text-center whitespace-nowrap"><span className={`text-xs font-medium ${getEngagementColor(line.spentRate)}`}>{line.spentRate.toFixed(2)}%</span></td>
+                            {canViewDetails && (
+                              <td className="px-3 py-2 text-center whitespace-nowrap">
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); onViewEngagements(line.id); }}
+                                  className="inline-flex items-center px-2 py-1 text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 rounded-full hover:bg-blue-200 dark:hover:bg-blue-900/60 transition-colors"
+                                >
+                                  <Eye className="w-3 h-3 mr-1" />Détails
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1694,7 +1891,7 @@ const BudgetTracking: React.FC<BudgetTrackingProps> = ({
               <div className="p-3 sm:p-4 border-t border-gray-200">
                 <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
                   <div className="text-xs sm:text-sm text-gray-700">
-                    Lignes {startIndex + 1}-{Math.min(startIndex + itemsPerPage, filteredAndSortedData.length)} sur {filteredAndSortedData.length}
+                    Lignes budgétaires {startIndex + 1}-{Math.min(startIndex + itemsPerPage, groupedLines.length)} sur {groupedLines.length}
                   </div>
                   <div className="flex items-center space-x-1">
                     <button
